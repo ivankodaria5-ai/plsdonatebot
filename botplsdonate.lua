@@ -999,10 +999,47 @@ function serverHop(skipReturnHome)
     end
     
     log("[HOP] Beginning server search...")
-    
-    local cursor = ""
-    
+
+    -- Stagger bots: random delay so multiple bots don't hammer API simultaneously
+    local stagger = math.random(1, 12)
+    log("[HOP] Stagger delay: " .. stagger .. "s (avoids API rate-limits with multiple bots)")
+    waitWithMovement(stagger)
+
+    local cursor         = ""
+    local hopStart       = tick()
+    local MAX_HOP_TIME   = 300  -- 5 min max in serverHop before emergency fallback
+    local rate429Count   = 0    -- consecutive 429 errors
+    local MAX_429_BEFORE_FALLBACK = 4  -- after 4x429 → teleport directly
+
+    -- Emergency fallback: direct teleport without API (goes to random server)
+    local function emergencyTeleport(reason)
+        log("[HOP] ⚡ Emergency fallback (" .. reason .. ") — teleporting directly to random server")
+        queueFunc([[
+local httprequest = (syn and syn.request) or http and http.request or http_request or (fluxus and fluxus.request) or request
+local response = httprequest({Url = "]] .. SCRIPT_URL .. [["})
+if response and response.Body then loadstring(response.Body)()
+else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
+]])
+        local ok = pcall(function()
+            TeleportService:Teleport(PLACE_ID, player)
+        end)
+        if not ok then
+            -- Last resort: kick self to force reconnect
+            log("[HOP] Teleport failed — kicking self to force rejoin")
+            player:Kick("Rejoining server...")
+        end
+        waitWithMovement(180)  -- wait for teleport/rejoin
+    end
+
     while true do
+        -- Hard timeout: if stuck searching for >5 minutes, emergency teleport
+        if tick() - hopStart > MAX_HOP_TIME then
+            emergencyTeleport("5min timeout")
+            hopStart = tick()
+            cursor   = ""
+            rate429Count = 0
+        end
+
         -- Simple 5 second delay between requests
         waitWithMovement(5)
         
@@ -1027,11 +1064,21 @@ function serverHop(skipReturnHome)
         
         -- Check for 429 Too Many Requests
         if response.StatusCode == 429 then
-            log("[HOP] ⚠️ 429 Too Many Requests! Cooling down for 30s...")
-            waitWithMovement(30)
-            cursor = ""
+            rate429Count += 1
+            local cooldown = math.min(30 * rate429Count, 120)  -- exponential backoff, max 120s
+            log(string.format("[HOP] ⚠️ 429 Too Many Requests! (x%d) Cooling down for %ds...", rate429Count, cooldown))
+            if rate429Count >= MAX_429_BEFORE_FALLBACK then
+                emergencyTeleport(rate429Count .. "x 429 errors")
+                hopStart = tick()
+                cursor   = ""
+                rate429Count = 0
+            else
+                waitWithMovement(cooldown)
+                cursor = ""
+            end
             continue
         end
+        rate429Count = 0  -- reset on successful response
         
         if not response.Body then
             log("[HOP] Response has no Body field! Likely rate-limited by Roblox.")

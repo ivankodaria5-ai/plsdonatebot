@@ -346,26 +346,50 @@ local function walkRandomDirection(studs, waitTime)
     end
 end
 
--- Check if player already owns a booth; returns position if yes, nil if no
+local claimedBoothNum = nil  -- set once per script session when booth is claimed
+
+-- Safely get the world position of a booth interaction object (Part or Model)
+local function getInteractPos(interact)
+    local ok, pos = pcall(function()
+        if interact:IsA("BasePart") then
+            return interact.Position
+        elseif interact.PrimaryPart then
+            return interact.PrimaryPart.Position
+        else
+            return interact:GetPivot().Position
+        end
+    end)
+    return ok and pos or nil
+end
+
+-- Check BoothUI to see if this player already owns a booth; returns position or nil
 local function findOwnedBooth(boothLocation)
     local boothUI = boothLocation and (boothLocation.BoothUI or boothLocation:FindFirstChild("BoothUI"))
     if not boothUI then return nil end
     local interactions = workspace:FindFirstChild("BoothInteractions")
     if not interactions then return nil end
+    local myName    = tostring(player.Name)
+    local myDisplay = tostring(player.DisplayName)
     for _, uiFrame in ipairs(boothUI:GetChildren()) do
         if uiFrame:IsA("Frame") then
             local details = uiFrame:FindFirstChild("Details")
             local owner   = details and details:FindFirstChild("Owner")
             if owner then
-                local txt = owner.Text or ""
-                if string.find(txt, player.DisplayName) or string.find(txt, player.Name) then
+                local txt = tostring(owner.Text or "")
+                -- plain=true: no Lua pattern issues with special chars in names
+                local isOwner = string.find(txt, myName, 1, true)
+                               or string.find(txt, myDisplay, 1, true)
+                if isOwner then
                     local boothNum = tonumber(uiFrame.Name:match("%d+"))
                     if boothNum then
                         for _, interact in ipairs(interactions:GetChildren()) do
                             if interact:GetAttribute("BoothSlot") == boothNum then
-                                local pos = interact.Position
-                                log("[BOOTH] Already own booth #" .. boothNum .. " — skipping claim")
-                                return Vector3.new(pos.X, pos.Y, pos.Z)
+                                local pos = getInteractPos(interact)
+                                if pos then
+                                    log("[BOOTH] Already own booth #" .. boothNum .. " — reusing")
+                                    claimedBoothNum = boothNum
+                                    return Vector3.new(pos.X, pos.Y, pos.Z)
+                                end
                             end
                         end
                     end
@@ -378,16 +402,30 @@ end
 
 local function claimBooth()
     log("=== BOOTH CLAIMER ===")
+
+    -- Fast path: booth already claimed in this Lua session
+    if claimedBoothNum then
+        log("[BOOTH] Booth #" .. claimedBoothNum .. " already claimed this session — skipping")
+        local boothLocation = getBoothLocation()
+        if boothLocation then
+            local existing = findOwnedBooth(boothLocation)
+            if existing then return existing end
+            -- claim was lost somehow (edge case) — fall through to re-claim
+            claimedBoothNum = nil
+            log("[BOOTH] Booth was lost — re-claiming...")
+        end
+    end
+
     local boothLocation = getBoothLocation()
     if not boothLocation then
         log("[BOOTH] ERROR: Could not find booth UI!")
         return nil
     end
 
-    -- Already have a booth? Don't claim again
+    -- Double-check via UI scan
     local existing = findOwnedBooth(boothLocation)
     if existing then
-        log("[BOOTH] Already own a booth — reusing it, no new claim needed")
+        log("[BOOTH] Already own a booth — reusing it")
         return existing
     end
 
@@ -462,6 +500,7 @@ local function claimBooth()
             -- Verify claim
             claimed = verifyClaim(boothLocation, booth.number)
             if claimed then
+                claimedBoothNum = booth.number  -- remember: don't claim again this session
                 log("╔═══════════════════════════════════════")
                 log("║ [SUCCESS] CLAIMED BOOTH #" .. booth.number .. "!")
                 log("║ Position: " .. tostring(booth.position))

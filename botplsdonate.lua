@@ -87,6 +87,41 @@ local MSG_FOLLOW_ME = "Follow me!"
 local MSG_HERE_IS_HOUSE = "Here is my booth!"
 local MSG_OK_FINE = "Ok fine :("
 
+local SECOND_ATTEMPT_CHANCE = 0.30
+local FRUSTRATION_THRESHOLD = 5
+
+local NO_RESPONSE_MSGS = {
+    "okay no response...",
+    "alright moving on lol",
+    "probably afk okay",
+    "no answer guess moving on",
+    "silence... alright then",
+    "not responding, next!",
+    "guess they busy okay",
+    "okay bye then lol",
+}
+
+local SECOND_ATTEMPT_MSGS = {
+    "maybe just 5 robux? :(",
+    "pleeeease? just a tiny bit?",
+    "are you sure? even just a little?",
+    "can u reconsider? any amount helps :)",
+    "even 1 robux would help :(",
+    "pretty please? :c",
+    "last chance pls? :(",
+}
+
+local FRUSTRATION_MSGS = {
+    "today is not my day...",
+    "everyone saying no today :(",
+    "nobody wants to help today",
+    "tough crowd today",
+    "sad times...",
+    "where are all the kind people?",
+    "having bad luck today lol",
+    "why everyone say no :(",
+}
+
 local JUMP_TIME         = 5
 local CIRCLE_COOLDOWN   = 4
 local NORMAL_COOLDOWN   = 5
@@ -102,6 +137,8 @@ local SPRINT_KEY        = Enum.KeyCode.LeftShift
 
 -- Track consecutive stuck failures
 local consecutiveStuckCount = 0
+-- Track refusal/no-response streak for frustration messages
+local refusalStreak = 0
 
 -- ==================== STATISTICS ====================
 local Stats = {
@@ -568,16 +605,15 @@ local function chasePlayer(t)
     local h = player.Character:FindFirstChild("Humanoid")
     local r = player.Character:FindFirstChild("HumanoidRootPart")
     if not h or not r then return false end
-    log("[CHASE] Going to " .. t.Name)
-    
+    log("[CHASE] Going to " .. t.Name .. " (approaching from front)")
+
     local function safeGetPos()
         local targetHRP = t.Character and t.Character:FindFirstChild("HumanoidRootPart")
-        if not targetHRP then
-            return nil
-        end
-        return targetHRP.Position
+        if not targetHRP then return nil end
+        -- Aim for a position 4 studs in front of the target's face
+        return targetHRP.Position + targetHRP.CFrame.LookVector * 4
     end
-    
+
     return performMove(h, r, safeGetPos, true)
 end
 
@@ -610,6 +646,54 @@ local function sendChat(msg)
                     and ReplicatedStorage.DefaultChatSystemChatEvents:FindFirstChild("SayMessageRequest")
         if say then pcall(function() say:FireServer(msg, "All") end) end
     end)
+end
+
+-- Count words in a string
+local function countWords(s)
+    local count = 1
+    for _ in s:gmatch("%s+") do count = count + 1 end
+    return count
+end
+
+-- Send chat with typing delay (simulates human typing speed)
+local function sendChatTyped(msg)
+    local words = countWords(msg)
+    local delay
+    if words <= 3 then
+        delay = math.random() * 0.3 + 0.5   -- 0.5–0.8s
+    elseif words <= 8 then
+        delay = math.random() * 0.8 + 1.0   -- 1.0–1.8s
+    else
+        delay = math.random() * 1.0 + 2.0   -- 2.0–3.0s
+    end
+    task.wait(delay)
+    sendChat(msg)
+end
+
+-- Random idle action between players (looks human)
+local function doIdleAction()
+    local roll = math.random()
+    if roll < 0.05 then
+        -- 5% chance: random jump
+        log("[IDLE] Random jump")
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+        task.wait(0.35)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+    elseif roll < 0.08 then
+        -- 3% chance: spin around
+        log("[IDLE] Random spin")
+        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            for _ = 1, 8 do
+                hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.pi / 4, 0)
+                task.wait(0.05)
+            end
+        end
+    elseif roll < 0.10 then
+        -- 2% chance: pause briefly
+        log("[IDLE] Random pause")
+        task.wait(math.random() * 1.0 + 0.5)
+    end
 end
 
 local function findClosest()
@@ -663,8 +747,11 @@ local function nextPlayer()
 
     log("[MAIN] Target → " .. target.Name)
 
+    -- Random idle action before approaching (looks more human)
+    doIdleAction()
+
     if chasePlayer(target) then
-        sendChat(string.lower(target.Name) .. " " .. getRandomMessage())
+        sendChatTyped(string.lower(target.Name) .. " " .. getRandomMessage())
         Stats.approached += 1
         startCircleDance(CIRCLE_COOLDOWN)
         task.wait(CIRCLE_COOLDOWN)
@@ -675,72 +762,108 @@ local function nextPlayer()
             faceTargetBriefly(target)
         end
 
-        -- === WAIT FOR RESPONSE ===
-        resetResponse()
-        log("[WAIT] Waiting " .. WAIT_FOR_ANSWER_TIME .. "s for " .. target.Name .. "'s reply...")
-        local start = tick()
-        while tick() - start < WAIT_FOR_ANSWER_TIME do
-            -- Check if target still exists
-            if not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
-                log("[WAIT] Target left, moving on")
-                ignoreList[target.UserId] = true
-                break
-            end
-            
-            -- Get player and target positions
-            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-            local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
-            
-            if root and targetRoot then
-                local distance = (root.Position - targetRoot.Position).Magnitude
-                
-                -- If target is too far, follow them
-                if distance > MAX_WAIT_DISTANCE then
-                    log("[WAIT] Target moving away, following...")
-                    local humanoid = player.Character:FindFirstChild("Humanoid")
-                    if humanoid then
-                        humanoid:MoveTo(targetRoot.Position)
+        -- ── Wait for response helper ──────────────────────────────
+        -- Returns: "yes" | "no" | "timeout" | "left"
+        local function waitForResponse(waitTime)
+            resetResponse()
+            local start = tick()
+            while tick() - start < waitTime do
+                if not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
+                    log("[WAIT] Target left")
+                    return "left"
+                end
+                local root       = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
+                if root and targetRoot then
+                    if (root.Position - targetRoot.Position).Magnitude > MAX_WAIT_DISTANCE then
+                        log("[WAIT] Target moving away, following...")
+                        local humanoid = player.Character:FindFirstChild("Humanoid")
+                        if humanoid then humanoid:MoveTo(targetRoot.Position) end
                     end
+                    faceTargetBriefly(target)
                 end
-                faceTargetBriefly(target)
+                if responseReceived and lastSpeaker == target.Name then
+                    local msg = lastMessage
+                    log("[RESPONSE] " .. target.Name .. " said: " .. msg)
+                    local saidYes = false
+                    for _, word in ipairs(YES_LIST) do
+                        if msg:find(word) then saidYes = true; break end
+                    end
+                    local saidNo = false
+                    for _, word in ipairs(NO_LIST) do
+                        if msg:find(word) then saidNo = true; break end
+                    end
+                    if saidYes then return "yes" end
+                    if saidNo  then return "no"  end
+                end
+                task.wait(0.1)
             end
-            
-            if responseReceived and lastSpeaker == target.Name then
-                local msg = lastMessage
-                log("[RESPONSE] " .. target.Name .. " said: " .. msg)
+            return "timeout"
+        end
+        -- ─────────────────────────────────────────────────────────
 
-                local saidYes = false
-                for _, word in ipairs(YES_LIST) do
-                    if msg:find(word) then saidYes = true; break end
-                end
-                local saidNo = false
-                for _, word in ipairs(NO_LIST) do
-                    if msg:find(word) then saidNo = true; break end
-                end
+        log("[WAIT] Waiting " .. WAIT_FOR_ANSWER_TIME .. "s for " .. target.Name .. "'s reply...")
+        local result = waitForResponse(WAIT_FOR_ANSWER_TIME)
 
-                if saidYes then
+        if result == "yes" then
+            -- ── Agreed ──
+            sendChat(MSG_FOLLOW_ME)
+            returnHome()
+            sendChat(MSG_HERE_IS_HOUSE)
+            ignoreList[target.UserId] = true
+            Stats.agreed += 1
+            refusalStreak = 0
+            task.wait(2)
+            return true
+
+        elseif result == "no" then
+            -- ── Refused ──
+            sendChat(MSG_OK_FINE)
+            task.wait(math.random() * 0.7 + 0.8)
+
+            -- 30% chance: second attempt
+            if math.random() < SECOND_ATTEMPT_CHANCE then
+                local attempt2 = SECOND_ATTEMPT_MSGS[math.random(#SECOND_ATTEMPT_MSGS)]
+                sendChatTyped(attempt2)
+                log("[RETRY] Second attempt: " .. attempt2)
+                local result2 = waitForResponse(5)
+                if result2 == "yes" then
                     sendChat(MSG_FOLLOW_ME)
                     returnHome()
                     sendChat(MSG_HERE_IS_HOUSE)
                     ignoreList[target.UserId] = true
                     Stats.agreed += 1
+                    refusalStreak = 0
                     task.wait(2)
-                    return true
-                elseif saidNo then
-                    sendChat(MSG_OK_FINE)
-                    ignoreList[target.UserId] = true
-                    Stats.refused += 1
-                    task.wait(1)
                     return true
                 end
             end
-            task.wait(0.1)
-        end
 
-        -- No reply or unclear
-        log("[WAIT] No valid reply from " .. target.Name .. " — moving on")
-        ignoreList[target.UserId] = true
-        Stats.no_response += 1
+            ignoreList[target.UserId] = true
+            Stats.refused += 1
+            refusalStreak += 1
+            if refusalStreak >= FRUSTRATION_THRESHOLD then
+                task.wait(1)
+                sendChat(FRUSTRATION_MSGS[math.random(#FRUSTRATION_MSGS)])
+                log("[FRUSTRATION] " .. refusalStreak .. " refusals in a row!")
+            end
+            task.wait(1)
+            return true
+
+        else
+            -- ── No response / left ──
+            local noRespMsg = NO_RESPONSE_MSGS[math.random(#NO_RESPONSE_MSGS)]
+            sendChatTyped(noRespMsg)
+            log("[WAIT] No valid reply from " .. target.Name .. " — moving on")
+            ignoreList[target.UserId] = true
+            Stats.no_response += 1
+            refusalStreak += 1
+            if refusalStreak >= FRUSTRATION_THRESHOLD then
+                task.wait(1)
+                sendChat(FRUSTRATION_MSGS[math.random(#FRUSTRATION_MSGS)])
+                log("[FRUSTRATION] " .. refusalStreak .. " refusals/no-responses in a row!")
+            end
+        end
     else
         ignoreList[target.UserId] = true
     end
@@ -951,6 +1074,19 @@ local function startReporting()
     end)
 end
 
+-- ========= NEW PLAYER DETECTION =========
+-- When a new player joins mid-session, remove them from ignoreList so the bot
+-- will approach them in the next nextPlayer() cycle.
+Players.PlayerAdded:Connect(function(newPlayer)
+    task.wait(3)  -- Wait for character to load
+    if ignoreList[newPlayer.UserId] then
+        ignoreList[newPlayer.UserId] = nil
+        log("[NEW] Removed " .. newPlayer.Name .. " from ignoreList (new arrival)")
+    else
+        log("[NEW] Player joined: " .. newPlayer.Name)
+    end
+end)
+
 -- ========= START =========
 log("=== SOCIAL GREETER BOT – ULTIMATE EDITION ===")
 log("=== AUTO BOOTH CLAIM + SERVER HOP ===")
@@ -960,20 +1096,29 @@ if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart
 end
 
 startReporting()
--- Main loop: greet everyone, then hop (server hop never returns, it keeps trying)
-while nextPlayer() do end
 
-log("[MAIN] Everyone greeted on this server!")
-log("[MAIN] Initiating server hop...")
-serverHop()
-
--- Script should never reach here because serverHop loops forever
-log("[ERROR] Server hop ended unexpectedly! Restarting...")
-task.wait(5)
--- Restart by re-running from greeting phase
+-- Main loop: greet everyone, then wait for new arrivals before hopping
 while true do
     while nextPlayer() do end
-    log("[MAIN] Everyone greeted on this server!")
-    log("[MAIN] Initiating server hop...")
-    serverHop()
+
+    -- Everyone greeted — wait 20s in case new players join before hopping
+    log("[MAIN] Everyone greeted! Waiting 20s for new arrivals...")
+    returnHome()
+    local waitStart = tick()
+    local gotNewPlayer = false
+    while tick() - waitStart < 20 do
+        if findClosest() then
+            gotNewPlayer = true
+            break
+        end
+        task.wait(2)
+    end
+
+    if gotNewPlayer then
+        log("[MAIN] New players found, continuing greeting loop...")
+    else
+        log("[MAIN] No new players in 20s — initiating server hop...")
+        serverHop()
+        -- serverHop loops forever; this line never runs
+    end
 end

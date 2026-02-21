@@ -181,6 +181,7 @@ local PathfindingService    = game:GetService("PathfindingService")
 local TextChatService       = game:GetService("TextChatService")
 local ReplicatedStorage     = game:GetService("ReplicatedStorage")
 local VirtualInputManager   = game:GetService("VirtualInputManager")
+local VirtualUser           = game:GetService("VirtualUser")
 local TeleportService       = game:GetService("TeleportService")
 local HttpService           = game:GetService("HttpService")
 local player                = Players.LocalPlayer
@@ -210,6 +211,44 @@ if not player.Character then
 end
 player.Character:WaitForChild("HumanoidRootPart")
 log("Character loaded!")
+
+-- ==================== ANTI-AFK: Error 278 prevention ====================
+-- Error 278 = "Disconnected for being idle 20 minutes"
+-- VirtualUser simulates controller input so Roblox never considers the bot idle.
+player.Idled:Connect(function()
+    VirtualUser:CaptureController()
+    VirtualUser:ClickButton2(Vector2.new())
+    log("[AFK] Anti-AFK fired — idle kick prevented (Error 278)")
+end)
+
+-- Backup: click every 10 minutes regardless (belt + suspenders)
+task.spawn(function()
+    while true do
+        task.wait(600)
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton2(Vector2.new())
+        end)
+    end
+end)
+log("[AFK] Anti-AFK running (VirtualUser)")
+
+-- ==================== AUTO-RECONNECT QUEUE: Error 277 recovery ====================
+-- Error 277 = lost connection / network drop.
+-- queueonteleport queues a script to run after ANY next join/teleport,
+-- including when the player clicks "Reconnect" on the 277 screen.
+-- So pressing Reconnect automatically restarts the bot — no manual reinjection needed.
+local _reconnectScript = [[
+local _req = (syn and syn.request) or http and http.request or http_request or (fluxus and fluxus.request) or request
+local _ok, _res = pcall(_req, {Url = "]] .. SCRIPT_URL .. [["})
+if _ok and _res and _res.Body and _res.Body ~= "" then
+    loadstring(_res.Body)()
+else
+    pcall(function() loadstring(game:HttpGet("]] .. SCRIPT_URL .. [[", true))() end)
+end
+]]
+pcall(function() queueFunc(_reconnectScript) end)
+log("[RECONNECT] Script queued — clicking Reconnect on 277 screen will auto-restart bot")
 
 -- ==================== BOOTH CLAIMER ====================
 local function getBoothLocation()

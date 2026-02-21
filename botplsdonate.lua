@@ -153,6 +153,20 @@ local Stats = {
 }
 local sessionStart = tick()
 
+-- ==================== INTERACTION LOG ====================
+-- Buffer of per-player conversations; flushed to dashboard every report cycle.
+local interactionLog = {}
+
+local function logInteraction(targetName, botMsg, playerReply, outcome)
+    table.insert(interactionLog, {
+        ts      = os.time(),
+        name    = targetName,
+        bot     = botMsg,
+        reply   = playerReply or "",
+        outcome = outcome,    -- "agreed" | "refused" | "no_response" | "left" | "chase_fail"
+    })
+end
+
 -- ==================== FILE LOGGING SET  ====================
 local logLines = {}
 local function log(msg)
@@ -800,7 +814,8 @@ local function nextPlayer()
     doIdleAction()
 
     if chasePlayer(target) then
-        sendChatTyped(string.lower(target.Name) .. " " .. getRandomMessage())
+        local openingMsg = string.lower(target.Name) .. " " .. getRandomMessage()
+        sendChatTyped(openingMsg)
         Stats.approached += 1
         startCircleDance(CIRCLE_COOLDOWN)
         task.wait(CIRCLE_COOLDOWN)
@@ -812,14 +827,14 @@ local function nextPlayer()
         end
 
         -- ── Wait for response helper ──────────────────────────────
-        -- Returns: "yes" | "no" | "timeout" | "left"
+        -- Returns outcome ("yes"|"no"|"timeout"|"left"), player's reply text
         local function waitForResponse(waitTime)
             resetResponse()
             local start = tick()
             while tick() - start < waitTime do
                 if not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
                     log("[WAIT] Target left")
-                    return "left"
+                    return "left", ""
                 end
                 local root       = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
                 local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
@@ -842,17 +857,17 @@ local function nextPlayer()
                     for _, word in ipairs(NO_LIST) do
                         if msg:find(word) then saidNo = true; break end
                     end
-                    if saidYes then return "yes" end
-                    if saidNo  then return "no"  end
+                    if saidYes then return "yes", msg end
+                    if saidNo  then return "no",  msg end
                 end
                 task.wait(0.1)
             end
-            return "timeout"
+            return "timeout", ""
         end
         -- ─────────────────────────────────────────────────────────
 
         log("[WAIT] Waiting " .. WAIT_FOR_ANSWER_TIME .. "s for " .. target.Name .. "'s reply...")
-        local result = waitForResponse(WAIT_FOR_ANSWER_TIME)
+        local result, playerReply = waitForResponse(WAIT_FOR_ANSWER_TIME)
 
         if result == "yes" then
             -- ── Agreed ──
@@ -862,6 +877,7 @@ local function nextPlayer()
             ignoreList[target.UserId] = true
             Stats.agreed += 1
             refusalStreak = 0
+            logInteraction(target.Name, openingMsg, playerReply, "agreed")
             task.wait(2)
             return true
 
@@ -875,7 +891,7 @@ local function nextPlayer()
                 local attempt2 = SECOND_ATTEMPT_MSGS[math.random(#SECOND_ATTEMPT_MSGS)]
                 sendChatTyped(attempt2)
                 log("[RETRY] Second attempt: " .. attempt2)
-                local result2 = waitForResponse(5)
+                local result2, reply2 = waitForResponse(5)
                 if result2 == "yes" then
                     sendChat(MSG_FOLLOW_ME)
                     returnHome()
@@ -883,9 +899,21 @@ local function nextPlayer()
                     ignoreList[target.UserId] = true
                     Stats.agreed += 1
                     refusalStreak = 0
+                    -- log both attempts in one record
+                    logInteraction(target.Name,
+                        openingMsg .. " → [refused] → " .. attempt2,
+                        playerReply .. " / " .. reply2,
+                        "agreed_2nd")
                     task.wait(2)
                     return true
                 end
+                -- second attempt also failed
+                logInteraction(target.Name,
+                    openingMsg .. " → [refused] → " .. attempt2,
+                    playerReply .. " / " .. reply2,
+                    "refused")
+            else
+                logInteraction(target.Name, openingMsg, playerReply, "refused")
             end
 
             ignoreList[target.UserId] = true
@@ -907,6 +935,8 @@ local function nextPlayer()
             ignoreList[target.UserId] = true
             Stats.no_response += 1
             refusalStreak += 1
+            logInteraction(target.Name, openingMsg, "",
+                result == "left" and "left" or "no_response")
             if refusalStreak >= FRUSTRATION_THRESHOLD then
                 task.wait(1)
                 sendChat(FRUSTRATION_MSGS[math.random(#FRUSTRATION_MSGS)])
@@ -914,6 +944,8 @@ local function nextPlayer()
             end
         end
     else
+        -- Chase failed (player moved away / unreachable)
+        logInteraction(target.Name, "", "", "chase_fail")
         ignoreList[target.UserId] = true
     end
 
@@ -1237,6 +1269,10 @@ local function startReporting()
             pcall(function()
                 -- Stats.raised_current is kept live by monitorDonations()
                 -- (set at startup from leaderstats.Raised, then updated on every change)
+                -- Flush interaction log: snapshot current buffer then clear it
+                local logSnapshot = interactionLog
+                interactionLog = {}
+
                 local body = HttpService:JSONEncode({
                     id              = tostring(player.UserId),
                     name            = player.Name,
@@ -1251,6 +1287,7 @@ local function startReporting()
                     status          = "Active",
                     job_id          = tostring(game.JobId),
                     session_start   = sessionStart,
+                    interactions    = logSnapshot,
                 })
                 request({
                     Url     = DASH_URL .. "/pd_update",

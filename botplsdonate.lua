@@ -346,6 +346,36 @@ local function walkRandomDirection(studs, waitTime)
     end
 end
 
+-- Check if player already owns a booth; returns position if yes, nil if no
+local function findOwnedBooth(boothLocation)
+    local boothUI = boothLocation and (boothLocation.BoothUI or boothLocation:FindFirstChild("BoothUI"))
+    if not boothUI then return nil end
+    local interactions = workspace:FindFirstChild("BoothInteractions")
+    if not interactions then return nil end
+    for _, uiFrame in ipairs(boothUI:GetChildren()) do
+        if uiFrame:IsA("Frame") then
+            local details = uiFrame:FindFirstChild("Details")
+            local owner   = details and details:FindFirstChild("Owner")
+            if owner then
+                local txt = owner.Text or ""
+                if string.find(txt, player.DisplayName) or string.find(txt, player.Name) then
+                    local boothNum = tonumber(uiFrame.Name:match("%d+"))
+                    if boothNum then
+                        for _, interact in ipairs(interactions:GetChildren()) do
+                            if interact:GetAttribute("BoothSlot") == boothNum then
+                                local pos = interact.Position
+                                log("[BOOTH] Already own booth #" .. boothNum .. " — skipping claim")
+                                return Vector3.new(pos.X, pos.Y, pos.Z)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
 local function claimBooth()
     log("=== BOOTH CLAIMER ===")
     local boothLocation = getBoothLocation()
@@ -353,7 +383,14 @@ local function claimBooth()
         log("[BOOTH] ERROR: Could not find booth UI!")
         return nil
     end
-    
+
+    -- Already have a booth? Don't claim again
+    local existing = findOwnedBooth(boothLocation)
+    if existing then
+        log("[BOOTH] Already own a booth — reusing it, no new claim needed")
+        return existing
+    end
+
     local unclaimed = findUnclaimedBooths(boothLocation)
     log("[BOOTH] Found " .. #unclaimed .. " unclaimed booth(s)")
     

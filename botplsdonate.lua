@@ -1048,82 +1048,50 @@ end
 end
 
 -- ==================== DONATION MONITOR ====================
--- Reads the "Raised" counter directly from our booth UI.
--- When the value grows, we calculate the delta and record it as a donation.
--- This is the same method used by all serious PD bots (no chat parsing needed).
+-- Uses ReplicatedStorage.Events.ChatDonationAlert — the game's own RemoteEvent
+-- that fires with exact tipper name and amount whenever someone donates.
+-- This is the correct method used by serious PD bots (Stefanuk12, etc.)
 local function monitorDonations()
     task.spawn(function()
-        -- Find the BoothUI container
-        local boothUI
-        pcall(function()
-            boothUI = player:WaitForChild("PlayerGui", 10)
-                :WaitForChild("MapUIContainer", 10)
-                :WaitForChild("MapUI", 10)
-                :WaitForChild("BoothUI", 10)
+        local Events = ReplicatedStorage:WaitForChild("Events", 30)
+        if not Events then
+            log("[DONATE] ReplicatedStorage.Events not found — donation tracking disabled")
+            return
+        end
+        local alertEvent = Events:WaitForChild("ChatDonationAlert", 30)
+        if not alertEvent then
+            log("[DONATE] ChatDonationAlert not found — donation tracking disabled")
+            return
+        end
+
+        log("[DONATE] Listening for donations via ChatDonationAlert")
+
+        alertEvent.OnClientEvent:Connect(function(tipper, receiver, amount)
+            -- receiver can be a Player object or a name string depending on game version
+            local isUs = false
+            if type(receiver) == "string" then
+                isUs = receiver == player.Name or receiver == player.DisplayName
+            elseif receiver then
+                isUs = receiver == player
+            end
+
+            if not isUs then return end
+
+            local amt = tonumber(amount) or 0
+            if amt <= 0 then return end
+
+            Stats.donations      += 1
+            Stats.robux_gross    += amt
+
+            local tipperName = (type(tipper) == "string" and tipper)
+                            or (typeof(tipper) == "Instance" and tipper.Name)
+                            or "?"
+            log(string.format(
+                "[DONATE] %s donated R$%d! Session: R$%d gross / R$%d net (60%%) | %d donations",
+                tipperName, amt,
+                Stats.robux_gross, math.floor(Stats.robux_gross * 0.6),
+                Stats.donations))
         end)
-        if not boothUI then
-            log("[DONATE] BoothUI not found — donation tracking disabled")
-            return
-        end
-
-        -- Wait until a booth owned by us appears (up to 30 sec)
-        local ourBooth = nil
-        for _ = 1, 30 do
-            for _, frame in ipairs(boothUI:GetChildren()) do
-                local details = frame:FindFirstChild("Details")
-                if details then
-                    local ownerLabel = details:FindFirstChild("Owner")
-                    if ownerLabel then
-                        local t = ownerLabel.Text
-                        if t:find(player.DisplayName, 1, true) or t:find(player.Name, 1, true) then
-                            ourBooth = frame
-                            break
-                        end
-                    end
-                end
-            end
-            if ourBooth then break end
-            task.wait(1)
-        end
-
-        if not ourBooth then
-            log("[DONATE] Our booth not found in BoothUI — donation tracking disabled")
-            return
-        end
-
-        local raisedLabel = ourBooth.Details:FindFirstChild("Raised")
-        if not raisedLabel then
-            log("[DONATE] No 'Raised' label in booth — donation tracking disabled")
-            return
-        end
-
-        -- Parse "1,234 Raised" → 1234
-        local function readRaised()
-            local numStr = (raisedLabel.Text or "0"):match("^([%d,]+)")
-            return tonumber((numStr or "0"):gsub(",", "")) or 0
-        end
-
-        local lastRaised = readRaised()
-        log(string.format("[DONATE] Monitoring booth %s — current Raised: %d R$", ourBooth.Name, lastRaised))
-
-        while true do
-            task.wait(5)
-            local ok, current = pcall(readRaised)
-            if ok and current > lastRaised then
-                local delta = current - lastRaised
-                Stats.donations     += 1
-                Stats.robux_gross   += delta
-                Stats.raised_current = current
-                local net = math.floor(delta * 0.6)
-                log(string.format(
-                    "[DONATE] +%d R$ raised (+%d net after 40%% fee) | Total: %d gross / %d net | %d donations",
-                    delta, net, Stats.robux_gross, math.floor(Stats.robux_gross * 0.6), Stats.donations))
-                lastRaised = current
-            elseif ok then
-                Stats.raised_current = current
-                lastRaised = current
-            end
-        end
     end)
 end
 
@@ -1133,6 +1101,14 @@ local function startReporting()
     task.spawn(function()
         while true do
             pcall(function()
+                -- Read all-time Raised from leaderstats (the number shown on the leaderboard)
+                local raisedAllTime = 0
+                pcall(function()
+                    local ls = player:FindFirstChild("leaderstats")
+                    local rv = ls and ls:FindFirstChild("Raised")
+                    raisedAllTime = rv and tonumber(rv.Value) or 0
+                end)
+
                 local body = HttpService:JSONEncode({
                     id              = tostring(player.UserId),
                     name            = player.Name,
@@ -1143,7 +1119,7 @@ local function startReporting()
                     hops            = Stats.hops,
                     donations       = Stats.donations,
                     robux_gross     = Stats.robux_gross,
-                    raised_current  = Stats.raised_current,
+                    raised_current  = raisedAllTime,  -- all-time from leaderboard
                     status          = "Active",
                     job_id          = tostring(game.JobId),
                     session_start   = sessionStart,

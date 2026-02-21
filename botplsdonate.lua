@@ -1101,17 +1101,17 @@ startReporting()
 while true do
     while nextPlayer() do end
 
-    -- Everyone greeted — wait 20s in case new players join before hopping
-    log("[MAIN] Everyone greeted! Waiting 20s for new arrivals...")
+    -- Everyone greeted — wait 2s in case new players just joined before hopping
+    log("[MAIN] Everyone greeted! Waiting 2s for new arrivals...")
     returnHome()
     local waitStart = tick()
     local gotNewPlayer = false
-    while tick() - waitStart < 20 do
+    while tick() - waitStart < 2 do
         if findClosest() then
             gotNewPlayer = true
             break
         end
-        task.wait(2)
+        task.wait(0.5)
     end
 
     if gotNewPlayer then

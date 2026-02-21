@@ -1107,25 +1107,32 @@ local function monitorDonations()
     task.spawn(function()
         local tracked = false
 
-        -- ── METHOD 1: leaderstats.Raised.Changed ──────────────────────────
-        -- Used by: ALL popular PD bots (flackrunnerv2, littlepriceonu, etc.)
+        -- ── METHOD 1: leaderstats.Raised (WaitForChild, best) ─────────────
+        -- Sets Stats.raised_current immediately at startup (e.g. 85 R$)
+        -- and updates it on every donation. No FindFirstChild races.
         pcall(function()
-            local ls = player:WaitForChild("leaderstats", 15)
-            if not ls then return end
-            local raisedStat = ls:WaitForChild("Raised", 10)
-            if not raisedStat then return end
-            local last = raisedStat.Value
-            raisedStat.Changed:Connect(function(newVal)
+            local ls = player:WaitForChild("leaderstats", 25)
+            if not ls then log("[DONATE] leaderstats missing"); return end
+            local rs = ls:WaitForChild("Raised", 15)
+            if not rs then log("[DONATE] leaderstats.Raised missing"); return end
+
+            -- ★ Set the absolute current value right away
+            Stats.raised_current = tonumber(rs.Value) or 0
+            log(string.format("[DONATE] Method 1 active: leaderstats.Raised = R$%d", Stats.raised_current))
+
+            local last = rs.Value
+            rs.Changed:Connect(function(newVal)
+                Stats.raised_current = tonumber(newVal) or 0  -- keep in sync
                 onDonation(newVal - last, "LS")
                 last = newVal
             end)
             tracked = true
-            log(string.format("[DONATE] Method 1: leaderstats.Raised.Changed (current: R$%d)", raisedStat.Value))
         end)
         if tracked then return end
 
         -- ── METHOD 2: ChatDonationAlert RemoteEvent ────────────────────────
-        -- Used by: Stefanuk12, data list in littlepriceonu
+        -- Doesn't give us starting balance, but catches new donations.
+        -- Also reads initial balance from BoothUI text as fallback for raised_current.
         pcall(function()
             local Events = ReplicatedStorage:WaitForChild("Events", 15)
             if not Events then return end
@@ -1136,61 +1143,81 @@ local function monitorDonations()
                     and (receiver == player.Name or receiver == player.DisplayName)
                     or (receiver == player)
                 if not isUs then return end
+                local amt = tonumber(amount) or 0
+                Stats.raised_current += amt
                 local tipName = (type(tipper) == "string" and tipper)
                              or (typeof(tipper) == "Instance" and tipper.Name) or "?"
-                onDonation(tonumber(amount) or 0, "CDA:" .. tipName)
+                onDonation(amt, "CDA:" .. tipName)
             end)
             tracked = true
             log("[DONATE] Method 2: ChatDonationAlert RemoteEvent")
         end)
-        if tracked then return end
+        -- Method 2 doesn't stop fallback — also launch BoothUI for initial value
+        -- (even if ChatDonationAlert works we still need the starting balance)
+        task.spawn(function()
+            pcall(function()
+                local boothUI = player.PlayerGui
+                    :WaitForChild("MapUIContainer", 20)
+                    :WaitForChild("MapUI", 15)
+                    :WaitForChild("BoothUI", 15)
+                if not boothUI then return end
+                local ourBooth
+                for _ = 1, 40 do
+                    for _, v in ipairs(boothUI:GetChildren()) do
+                        local det = v:FindFirstChild("Details")
+                        if det and det:FindFirstChild("Owner") then
+                            local ownerName = det.Owner.Text:split("'")[1]
+                            if ownerName == player.DisplayName or ownerName == player.Name then
+                                ourBooth = v; break
+                            end
+                        end
+                    end
+                    if ourBooth then break end
+                    task.wait(1)
+                end
+                if not ourBooth then log("[DONATE] BoothUI: our booth not found"); return end
 
-        -- ── METHOD 3: BoothUI Raised text polling ─────────────────────────
-        -- Used by: littlepriceonu source.lua, flackrunnerv2
-        -- Format: "90 Raised" or "1,234 Raised" → split(" ")[1] → strip commas
-        pcall(function()
-            local boothUI = player.PlayerGui
-                :WaitForChild("MapUIContainer", 15)
-                :WaitForChild("MapUI", 10)
-                :WaitForChild("BoothUI", 10)
-            if not boothUI then return end
+                local function readRaised()
+                    local txt = ourBooth.Details.Raised.Text or "0"
+                    return tonumber(txt:split(" ")[1]:gsub(",", "")) or 0
+                end
 
-            local ourBooth
-            for _ = 1, 30 do
-                for _, v in ipairs(boothUI:GetChildren()) do
-                    local details = v:FindFirstChild("Details")
-                    if details and details:FindFirstChild("Owner") then
-                        if details.Owner.Text:split("'")[1] == player.DisplayName then
-                            ourBooth = v; break
+                -- ★ Capture starting balance from BoothUI right away
+                local initVal = readRaised()
+                if Stats.raised_current == 0 and initVal > 0 then
+                    Stats.raised_current = initVal
+                    log(string.format("[DONATE] raised_current from BoothUI: R$%d", initVal))
+                end
+
+                if not tracked then
+                    -- Use BoothUI polling as primary donation detection
+                    local last = initVal
+                    tracked = true
+                    log(string.format("[DONATE] Method 3: BoothUI polling (current: R$%d)", last))
+                    while true do
+                        task.wait(5)
+                        local ok, cur = pcall(readRaised)
+                        if ok then
+                            Stats.raised_current = cur
+                            onDonation(cur - last, "UI")
+                            last = cur
+                        end
+                    end
+                else
+                    -- Method 1 or 2 already active — just keep raised_current synced from UI
+                    while true do
+                        task.wait(10)
+                        local ok, cur = pcall(readRaised)
+                        if ok and cur > Stats.raised_current then
+                            Stats.raised_current = cur
                         end
                     end
                 end
-                if ourBooth then break end
-                task.wait(1)
-            end
-            if not ourBooth then return end
-
-            local function readRaised()
-                local txt = ourBooth.Details.Raised.Text or "0"
-                return tonumber(txt:split(" ")[1]:gsub(",", "")) or 0
-            end
-
-            local last = readRaised()
-            tracked = true
-            log(string.format("[DONATE] Method 3: BoothUI polling (current: R$%d)", last))
-
-            while true do
-                task.wait(5)
-                local ok, cur = pcall(readRaised)
-                if ok then
-                    onDonation(cur - last, "UI")
-                    last = cur
-                end
-            end
+            end)
         end)
 
         if not tracked then
-            log("[DONATE] All 3 methods failed — donation tracking disabled")
+            log("[DONATE] All methods failed — donation tracking disabled")
         end
     end)
 end
@@ -1201,14 +1228,8 @@ local function startReporting()
     task.spawn(function()
         while true do
             pcall(function()
-                -- Read all-time Raised from leaderstats (the number shown on the leaderboard)
-                local raisedAllTime = 0
-                pcall(function()
-                    local ls = player:FindFirstChild("leaderstats")
-                    local rv = ls and ls:FindFirstChild("Raised")
-                    raisedAllTime = rv and tonumber(rv.Value) or 0
-                end)
-
+                -- Stats.raised_current is kept live by monitorDonations()
+                -- (set at startup from leaderstats.Raised, then updated on every change)
                 local body = HttpService:JSONEncode({
                     id              = tostring(player.UserId),
                     name            = player.Name,
@@ -1219,7 +1240,7 @@ local function startReporting()
                     hops            = Stats.hops,
                     donations       = Stats.donations,
                     robux_gross     = Stats.robux_gross,
-                    raised_current  = raisedAllTime,  -- all-time from leaderboard
+                    raised_current  = Stats.raised_current,
                     status          = "Active",
                     job_id          = tostring(game.JobId),
                     session_start   = sessionStart,

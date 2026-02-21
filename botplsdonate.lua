@@ -742,24 +742,31 @@ local function findClosest()
     if not player.Character then return nil end
     local root = player.Character:FindFirstChild("HumanoidRootPart")
     if not root then return nil end
-    local best, bestT = nil, math.huge
+    local best, bestDist = nil, math.huge
     local allPlayers = Players:GetPlayers()
     if not allPlayers then
         log("[DEBUG] Players:GetPlayers() returned nil!")
         return nil
     end
     for _, p in ipairs(allPlayers) do
-        if p and p ~= player and p.UserId and not ignoreList[p.UserId] and not BOT_ACCOUNTS[p.Name] and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-            local path = PathfindingService:CreatePath()
-            path:ComputeAsync(root.Position, p.Character.HumanoidRootPart.Position)
-            if path.Status == Enum.PathStatus.Success then
-                local dist = 0
-                local wp = path:GetWaypoints()
-                for i = 2, #wp do dist += (wp[i].Position - wp[i-1].Position).Magnitude end
-                local t = dist / 16
-                if t < bestT then bestT, best = t, p end
+        if p ~= player
+            and p.UserId
+            and not ignoreList[p.UserId]
+            and not BOT_ACCOUNTS[p.Name]
+            and p.Character
+        then
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local dist = (hrp.Position - root.Position).Magnitude
+                if dist < bestDist then
+                    bestDist = dist
+                    best = p
+                end
             end
         end
+    end
+    if best then
+        log(string.format("[FIND] Closest: %s (%.1f studs)", best.Name, bestDist))
     end
     return best
 end

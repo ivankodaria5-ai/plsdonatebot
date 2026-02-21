@@ -414,26 +414,6 @@ local function resetResponse()
     responseReceived = false
 end
 
--- Detect donation chat messages from the game system
--- Please Donate sends: "PlayerName donated X Robux to BotName!"
-local myNameLower        = player.Name:lower()
-local myDisplayNameLower = player.DisplayName:lower()
-
-local function checkDonation(text)
-    local t = text:lower()
-    if not t:find("donated") then return end
-    -- Message must mention our name
-    if not (t:find(myNameLower, 1, true) or t:find(myDisplayNameLower, 1, true)) then return end
-    -- Extract robux amount ("donated 10 robux", "donated 50 R$", etc.)
-    local amount = tonumber(t:match("donated%s+(%d+)"))
-                or tonumber(t:match("(%d+)%s+robux"))
-                or 1  -- amount unknown but count the event
-    Stats.donations      += 1
-    Stats.robux_received += amount
-    log(string.format("[DONATE] Donation detected! +%d R$ (total: %d donations, %d R$)",
-        amount, Stats.donations, Stats.robux_received))
-end
-
 -- Hook Legacy Chat
 spawn(function()
     local legacy = ReplicatedStorage:WaitForChild("DefaultChatSystemChatEvents", 5)
@@ -441,11 +421,10 @@ spawn(function()
         local ev = legacy:FindFirstChild("OnMessageDoneFiltering")
         if ev then
             ev.OnClientEvent:Connect(function(data)
-                local speaker = data.FromSpeaker or "System"
+                local speaker = data.FromSpeaker
                 local msg = (data.Message or data.OriginalMessage or ""):lower()
                 log(speaker .. ": " .. msg)
-                checkDonation(msg)  -- check ALL messages (including system) for donations
-                if speaker ~= "" and speaker ~= "System" and speaker ~= player.Name then
+                if speaker and speaker ~= player.Name then
                     lastSpeaker = speaker
                     lastMessage = msg
                     responseReceived = true
@@ -463,21 +442,17 @@ spawn(function()
             local function hook(ch)
                 if ch:IsA("TextChannel") then
                     ch.MessageReceived:Connect(function(msgObj)
-                        local text = (msgObj.Text or ""):lower()
                         local source = msgObj.TextSource
                         if source then
                             local speaker = source.Name
+                            local text = (msgObj.Text or ""):lower()
                             log(speaker .. ": " .. text)
                             if speaker ~= player.Name then
                                 lastSpeaker = speaker
                                 lastMessage = text
                                 responseReceived = true
                             end
-                        else
-                            -- System message (no TextSource)
-                            log("[SYSTEM]: " .. text)
                         end
-                        checkDonation(text)  -- check ALL messages for donations
                     end)
                 end
             end
@@ -1071,6 +1046,82 @@ end
     end
 end
 
+-- ==================== DONATION MONITOR ====================
+-- Reads the "Raised" counter directly from our booth UI.
+-- When the value grows, we calculate the delta and record it as a donation.
+-- This is the same method used by all serious PD bots (no chat parsing needed).
+local function monitorDonations()
+    task.spawn(function()
+        -- Find the BoothUI container
+        local boothUI
+        pcall(function()
+            boothUI = player:WaitForChild("PlayerGui", 10)
+                :WaitForChild("MapUIContainer", 10)
+                :WaitForChild("MapUI", 10)
+                :WaitForChild("BoothUI", 10)
+        end)
+        if not boothUI then
+            log("[DONATE] BoothUI not found — donation tracking disabled")
+            return
+        end
+
+        -- Wait until a booth owned by us appears (up to 30 sec)
+        local ourBooth = nil
+        for _ = 1, 30 do
+            for _, frame in ipairs(boothUI:GetChildren()) do
+                local details = frame:FindFirstChild("Details")
+                if details then
+                    local ownerLabel = details:FindFirstChild("Owner")
+                    if ownerLabel then
+                        local t = ownerLabel.Text
+                        if t:find(player.DisplayName, 1, true) or t:find(player.Name, 1, true) then
+                            ourBooth = frame
+                            break
+                        end
+                    end
+                end
+            end
+            if ourBooth then break end
+            task.wait(1)
+        end
+
+        if not ourBooth then
+            log("[DONATE] Our booth not found in BoothUI — donation tracking disabled")
+            return
+        end
+
+        local raisedLabel = ourBooth.Details:FindFirstChild("Raised")
+        if not raisedLabel then
+            log("[DONATE] No 'Raised' label in booth — donation tracking disabled")
+            return
+        end
+
+        -- Parse "1,234 Raised" → 1234
+        local function readRaised()
+            local numStr = (raisedLabel.Text or "0"):match("^([%d,]+)")
+            return tonumber((numStr or "0"):gsub(",", "")) or 0
+        end
+
+        local lastRaised = readRaised()
+        log(string.format("[DONATE] Monitoring booth %s — current Raised: %d R$", ourBooth.Name, lastRaised))
+
+        while true do
+            task.wait(5)
+            local ok, current = pcall(readRaised)
+            if ok and current > lastRaised then
+                local delta = current - lastRaised
+                Stats.donations      += 1
+                Stats.robux_received += delta
+                log(string.format("[DONATE] +%d R$ received! Total: %d R$ across %d donations",
+                    delta, Stats.robux_received, Stats.donations))
+                lastRaised = current
+            elseif ok then
+                lastRaised = current  -- keep in sync in case it resets on hop
+            end
+        end
+    end)
+end
+
 -- ==================== DASHBOARD REPORTING ====================
 local function startReporting()
     if DASH_URL == "" then return end
@@ -1124,6 +1175,7 @@ if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart
     task.wait(2)
 end
 
+monitorDonations()
 startReporting()
 
 -- Main loop: greet everyone, then wait for new arrivals before hopping

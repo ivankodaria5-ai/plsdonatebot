@@ -1132,9 +1132,8 @@ local function startReporting()
     if DASH_URL == "" then return end
     task.spawn(function()
         while true do
-            task.wait(15)
             pcall(function()
-                local payload = HttpService:JSONEncode({
+                local body = HttpService:JSONEncode({
                     id              = tostring(player.UserId),
                     name            = player.Name,
                     approached      = Stats.approached,
@@ -1146,16 +1145,17 @@ local function startReporting()
                     robux_gross     = Stats.robux_gross,
                     raised_current  = Stats.raised_current,
                     status          = "Active",
-                    job_id          = game.JobId,
+                    job_id          = tostring(game.JobId),
                     session_start   = sessionStart,
                 })
-                httprequest({
+                request({
                     Url     = DASH_URL .. "/pd_update",
                     Method  = "POST",
                     Headers = {["Content-Type"] = "application/json"},
-                    Body    = payload,
+                    Body    = body,
                 })
             end)
+            task.wait(15)
         end
     end)
 end

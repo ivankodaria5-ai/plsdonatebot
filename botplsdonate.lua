@@ -1399,7 +1399,7 @@ local function startReporting()
                     Body    = body,
                 })
             end)
-            task.wait(15)
+            task.wait(10)
         end
     end)
 end

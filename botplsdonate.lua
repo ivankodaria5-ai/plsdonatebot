@@ -142,11 +142,13 @@ local refusalStreak = 0
 
 -- ==================== STATISTICS ====================
 local Stats = {
-    approached  = 0,
-    agreed      = 0,
-    refused     = 0,
-    no_response = 0,
-    hops        = 0,
+    approached      = 0,
+    agreed          = 0,
+    refused         = 0,
+    no_response     = 0,
+    hops            = 0,
+    donations       = 0,   -- number of confirmed donation events
+    robux_received  = 0,   -- total robux detected from chat messages
 }
 local sessionStart = tick()
 
@@ -412,6 +414,26 @@ local function resetResponse()
     responseReceived = false
 end
 
+-- Detect donation chat messages from the game system
+-- Please Donate sends: "PlayerName donated X Robux to BotName!"
+local myNameLower        = player.Name:lower()
+local myDisplayNameLower = player.DisplayName:lower()
+
+local function checkDonation(text)
+    local t = text:lower()
+    if not t:find("donated") then return end
+    -- Message must mention our name
+    if not (t:find(myNameLower, 1, true) or t:find(myDisplayNameLower, 1, true)) then return end
+    -- Extract robux amount ("donated 10 robux", "donated 50 R$", etc.)
+    local amount = tonumber(t:match("donated%s+(%d+)"))
+                or tonumber(t:match("(%d+)%s+robux"))
+                or 1  -- amount unknown but count the event
+    Stats.donations      += 1
+    Stats.robux_received += amount
+    log(string.format("[DONATE] Donation detected! +%d R$ (total: %d donations, %d R$)",
+        amount, Stats.donations, Stats.robux_received))
+end
+
 -- Hook Legacy Chat
 spawn(function()
     local legacy = ReplicatedStorage:WaitForChild("DefaultChatSystemChatEvents", 5)
@@ -419,10 +441,11 @@ spawn(function()
         local ev = legacy:FindFirstChild("OnMessageDoneFiltering")
         if ev then
             ev.OnClientEvent:Connect(function(data)
-                local speaker = data.FromSpeaker
+                local speaker = data.FromSpeaker or "System"
                 local msg = (data.Message or data.OriginalMessage or ""):lower()
                 log(speaker .. ": " .. msg)
-                if speaker and speaker ~= player.Name then
+                checkDonation(msg)  -- check ALL messages (including system) for donations
+                if speaker ~= "" and speaker ~= "System" and speaker ~= player.Name then
                     lastSpeaker = speaker
                     lastMessage = msg
                     responseReceived = true
@@ -440,17 +463,21 @@ spawn(function()
             local function hook(ch)
                 if ch:IsA("TextChannel") then
                     ch.MessageReceived:Connect(function(msgObj)
+                        local text = (msgObj.Text or ""):lower()
                         local source = msgObj.TextSource
                         if source then
                             local speaker = source.Name
-                            local text = (msgObj.Text or ""):lower()
                             log(speaker .. ": " .. text)
                             if speaker ~= player.Name then
                                 lastSpeaker = speaker
                                 lastMessage = text
                                 responseReceived = true
                             end
+                        else
+                            -- System message (no TextSource)
+                            log("[SYSTEM]: " .. text)
                         end
+                        checkDonation(text)  -- check ALL messages for donations
                     end)
                 end
             end
@@ -1052,16 +1079,18 @@ local function startReporting()
             task.wait(15)
             pcall(function()
                 local payload = HttpService:JSONEncode({
-                    id            = tostring(player.UserId),
-                    name          = player.Name,
-                    approached    = Stats.approached,
-                    agreed        = Stats.agreed,
-                    refused       = Stats.refused,
-                    no_response   = Stats.no_response,
-                    hops          = Stats.hops,
-                    status        = "Active",
-                    job_id        = game.JobId,
-                    session_start = sessionStart,
+                    id             = tostring(player.UserId),
+                    name           = player.Name,
+                    approached     = Stats.approached,
+                    agreed         = Stats.agreed,
+                    refused        = Stats.refused,
+                    no_response    = Stats.no_response,
+                    hops           = Stats.hops,
+                    donations      = Stats.donations,
+                    robux_received = Stats.robux_received,
+                    status         = "Active",
+                    job_id         = game.JobId,
+                    session_start  = sessionStart,
                 })
                 httprequest({
                     Url     = DASH_URL .. "/pd_update",

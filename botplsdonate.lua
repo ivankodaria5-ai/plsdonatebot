@@ -668,8 +668,12 @@ local function nextPlayer()
         Stats.approached += 1
         startCircleDance(CIRCLE_COOLDOWN)
         task.wait(CIRCLE_COOLDOWN)
-        faceTargetBriefly(target)
-        task.wait(NORMAL_COOLDOWN)
+        local normElapsed = 0
+        while normElapsed < NORMAL_COOLDOWN do
+            task.wait(0.1)
+            normElapsed += 0.1
+            faceTargetBriefly(target)
+        end
 
         -- === WAIT FOR RESPONSE ===
         resetResponse()
@@ -697,11 +701,8 @@ local function nextPlayer()
                     if humanoid then
                         humanoid:MoveTo(targetRoot.Position)
                     end
-                    -- Don't call faceTargetBriefly here - let MoveTo control movement
-                else
-                    -- Only face when NOT moving
-                    faceTargetBriefly(target)
                 end
+                faceTargetBriefly(target)
             end
             
             if responseReceived and lastSpeaker == target.Name then

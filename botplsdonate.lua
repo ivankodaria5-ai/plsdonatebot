@@ -5,6 +5,7 @@ local MAX_PLAYERS_ALLOWED = 24                         -- Maximum players in ser
 local TELEPORT_RETRY_DELAY = 8                         -- Delay between teleport attempts (increased from 4)
 local TELEPORT_COOLDOWN = 30                           -- Cooldown between failed servers to avoid rate limit detection
 local SCRIPT_URL = "https://cdn.jsdelivr.net/gh/ivankodaria5-ai/plsdonatebot@main/botplsdonate.lua"
+local DASH_URL   = ""  -- Set to your dashboard URL e.g. "https://xyz.trycloudflare.com"
 
 local BOOTH_CHECK_POSITION = Vector3.new(165, 0, 311)  -- Center point to search for booths
 local MAX_BOOTH_DISTANCE = 92                          -- Max studs from check position
@@ -101,6 +102,16 @@ local SPRINT_KEY        = Enum.KeyCode.LeftShift
 
 -- Track consecutive stuck failures
 local consecutiveStuckCount = 0
+
+-- ==================== STATISTICS ====================
+local Stats = {
+    approached  = 0,
+    agreed      = 0,
+    refused     = 0,
+    no_response = 0,
+    hops        = 0,
+}
+local sessionStart = tick()
 
 -- ==================== FILE LOGGING SET  ====================
 local logLines = {}
@@ -654,6 +665,7 @@ local function nextPlayer()
 
     if chasePlayer(target) then
         sendChat(string.lower(target.Name) .. " " .. getRandomMessage())
+        Stats.approached += 1
         startCircleDance(CIRCLE_COOLDOWN)
         task.wait(CIRCLE_COOLDOWN)
         faceTargetBriefly(target)
@@ -710,11 +722,13 @@ local function nextPlayer()
                     returnHome()
                     sendChat(MSG_HERE_IS_HOUSE)
                     ignoreList[target.UserId] = true
+                    Stats.agreed += 1
                     task.wait(2)
                     return true
                 elseif saidNo then
                     sendChat(MSG_OK_FINE)
                     ignoreList[target.UserId] = true
+                    Stats.refused += 1
                     task.wait(1)
                     return true
                 end
@@ -725,6 +739,7 @@ local function nextPlayer()
         -- No reply or unclear
         log("[WAIT] No valid reply from " .. target.Name .. " — moving on")
         ignoreList[target.UserId] = true
+        Stats.no_response += 1
     else
         ignoreList[target.UserId] = true
     end
@@ -735,6 +750,7 @@ end
 
 -- ==================== SERVER HOP FUNCTION ====================
 function serverHop(skipReturnHome)
+    Stats.hops += 1
     log("[HOP] Starting server hop...")
     
     -- Return home before hopping (unless we're stuck and can't move)
@@ -904,6 +920,36 @@ end
     end
 end
 
+-- ==================== DASHBOARD REPORTING ====================
+local function startReporting()
+    if DASH_URL == "" then return end
+    task.spawn(function()
+        while true do
+            task.wait(15)
+            pcall(function()
+                local payload = HttpService:JSONEncode({
+                    id            = tostring(player.UserId),
+                    name          = player.Name,
+                    approached    = Stats.approached,
+                    agreed        = Stats.agreed,
+                    refused       = Stats.refused,
+                    no_response   = Stats.no_response,
+                    hops          = Stats.hops,
+                    status        = "Active",
+                    job_id        = game.JobId,
+                    session_start = sessionStart,
+                })
+                httprequest({
+                    Url     = DASH_URL .. "/pd_update",
+                    Method  = "POST",
+                    Headers = {["Content-Type"] = "application/json"},
+                    Body    = payload,
+                })
+            end)
+        end
+    end)
+end
+
 -- ========= START =========
 log("=== SOCIAL GREETER BOT – ULTIMATE EDITION ===")
 log("=== AUTO BOOTH CLAIM + SERVER HOP ===")
@@ -912,6 +958,7 @@ if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart
     task.wait(2)
 end
 
+startReporting()
 -- Main loop: greet everyone, then hop (server hop never returns, it keeps trying)
 while nextPlayer() do end
 

@@ -137,6 +137,7 @@ local SPRINT_KEY        = Enum.KeyCode.LeftShift
 
 -- Track consecutive stuck failures
 local consecutiveStuckCount = 0
+local lastActivityTime      = tick()  -- watchdog: time of last meaningful action
 -- Track refusal/no-response streak for frustration messages
 local refusalStreak = 0
 
@@ -582,13 +583,20 @@ end
 -- FIXED performMove & chasePlayer to handle target disappearing mid-chase
 local function performMove(humanoid, root, getPos, sprint)
     if sprint then startSprinting() end
-    local lastPos = root.Position
+    local lastPos   = root.Position
     local stuckTime = 0
     local jumpTries = 0
     local randTries = 0
+    local moveStart = tick()  -- total move timeout
 
     while true do
         task.wait(0.1)
+        -- Hard timeout: give up chasing after 60 seconds to avoid infinite loops
+        if tick() - moveStart > 60 then
+            log("[MOVE] Chase timeout (60s) — giving up on target")
+            if sprint then stopSprinting() end
+            return false
+        end
         local pos = getPos()
         if not pos then  -- Target lost mid-move
             log("[MOVE] Target lost mid-chase! Stopping movement.")
@@ -809,6 +817,7 @@ local function nextPlayer()
     end
 
     log("[MAIN] Target → " .. target.Name)
+    lastActivityTime = tick()  -- bot is actively working
 
     -- Random idle action before approaching (looks more human)
     doIdleAction()
@@ -853,6 +862,7 @@ local function nextPlayer()
                 end
                 if responseReceived and lastSpeaker == target.Name then
                     local msg = lastMessage
+                    lastActivityTime = tick()  -- got a reply — bot is active
                     log("[RESPONSE] " .. target.Name .. " said: " .. msg)
                     local saidYes = false
                     for _, word in ipairs(YES_LIST) do
@@ -960,6 +970,7 @@ end
 
 -- ==================== SERVER HOP FUNCTION ====================
 function serverHop(skipReturnHome)
+    lastActivityTime = tick()  -- reset watchdog so it doesn't double-fire during teleport
     Stats.hops += 1
     log("[HOP] Starting server hop...")
     
@@ -1329,6 +1340,19 @@ end
 
 monitorDonations()
 startReporting()
+
+-- ── Watchdog: if bot does nothing for 2 minutes, force server hop ──
+task.spawn(function()
+    local WATCHDOG_IDLE_LIMIT = 120  -- seconds
+    while true do
+        task.wait(30)
+        local idle = tick() - lastActivityTime
+        if idle > WATCHDOG_IDLE_LIMIT then
+            log(string.format("[WATCHDOG] Bot idle for %.0fs (limit %ds) — force hopping!", idle, WATCHDOG_IDLE_LIMIT))
+            serverHop(true)
+        end
+    end
+end)
 
 -- Main loop: greet everyone, then wait for new arrivals before hopping
 while true do

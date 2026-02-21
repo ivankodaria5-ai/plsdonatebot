@@ -839,10 +839,15 @@ local function nextPlayer()
                 local root       = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
                 local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
                 if root and targetRoot then
-                    if (root.Position - targetRoot.Position).Magnitude > MAX_WAIT_DISTANCE then
-                        log("[WAIT] Target moving away, following...")
-                        local humanoid = player.Character:FindFirstChild("Humanoid")
-                        if humanoid then humanoid:MoveTo(targetRoot.Position) end
+                    -- Always position bot 3 studs in front of the player's face
+                    local frontPos = targetRoot.Position + targetRoot.CFrame.LookVector * 3
+                    frontPos = Vector3.new(frontPos.X, targetRoot.Position.Y, frontPos.Z)
+                    local distToIdeal = (root.Position - frontPos).Magnitude
+                    local humanoid = player.Character:FindFirstChild("Humanoid")
+                    if humanoid then
+                        if distToIdeal > 1.5 then
+                            humanoid:MoveTo(frontPos)
+                        end
                     end
                     faceTargetBriefly(target)
                 end

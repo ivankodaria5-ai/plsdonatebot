@@ -1048,49 +1048,36 @@ end
 end
 
 -- ==================== DONATION MONITOR ====================
--- Uses ReplicatedStorage.Events.ChatDonationAlert — the game's own RemoteEvent
--- that fires with exact tipper name and amount whenever someone donates.
--- This is the correct method used by serious PD bots (Stefanuk12, etc.)
+-- Watches player.leaderstats.Raised for changes.
+-- When Raised grows — that's a real donation. Delta = amount received.
+-- Simplest and most reliable method, used by all popular PD scripts.
 local function monitorDonations()
     task.spawn(function()
-        local Events = ReplicatedStorage:WaitForChild("Events", 30)
-        if not Events then
-            log("[DONATE] ReplicatedStorage.Events not found — donation tracking disabled")
+        -- Wait for leaderstats to appear (the game creates them on join)
+        local leaderstats = player:WaitForChild("leaderstats", 30)
+        if not leaderstats then
+            log("[DONATE] leaderstats not found — donation tracking disabled")
             return
         end
-        local alertEvent = Events:WaitForChild("ChatDonationAlert", 30)
-        if not alertEvent then
-            log("[DONATE] ChatDonationAlert not found — donation tracking disabled")
+        local raisedStat = leaderstats:WaitForChild("Raised", 15)
+        if not raisedStat then
+            log("[DONATE] leaderstats.Raised not found — donation tracking disabled")
             return
         end
 
-        log("[DONATE] Listening for donations via ChatDonationAlert")
+        local lastRaised = raisedStat.Value
+        log(string.format("[DONATE] Watching leaderstats.Raised — current value: %d R$", lastRaised))
 
-        alertEvent.OnClientEvent:Connect(function(tipper, receiver, amount)
-            -- receiver can be a Player object or a name string depending on game version
-            local isUs = false
-            if type(receiver) == "string" then
-                isUs = receiver == player.Name or receiver == player.DisplayName
-            elseif receiver then
-                isUs = receiver == player
+        raisedStat.Changed:Connect(function(newValue)
+            local delta = newValue - lastRaised
+            if delta > 0 then
+                Stats.donations   += 1
+                Stats.robux_gross += delta
+                log(string.format(
+                    "[DONATE] +R$%d received! Total: R$%d gross / R$%d net (60%%) | %d donations",
+                    delta, Stats.robux_gross, math.floor(Stats.robux_gross * 0.6), Stats.donations))
             end
-
-            if not isUs then return end
-
-            local amt = tonumber(amount) or 0
-            if amt <= 0 then return end
-
-            Stats.donations      += 1
-            Stats.robux_gross    += amt
-
-            local tipperName = (type(tipper) == "string" and tipper)
-                            or (typeof(tipper) == "Instance" and tipper.Name)
-                            or "?"
-            log(string.format(
-                "[DONATE] %s donated R$%d! Session: R$%d gross / R$%d net (60%%) | %d donations",
-                tipperName, amt,
-                Stats.robux_gross, math.floor(Stats.robux_gross * 0.6),
-                Stats.donations))
+            lastRaised = newValue
         end)
     end)
 end

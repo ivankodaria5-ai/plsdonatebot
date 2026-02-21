@@ -138,6 +138,7 @@ local SPRINT_KEY        = Enum.KeyCode.LeftShift
 -- Track consecutive stuck failures
 local consecutiveStuckCount = 0
 local lastActivityTime      = tick()  -- watchdog: time of last meaningful action
+local lastBeggingTime       = tick()  -- watchdog: time of last actual donation request sent
 -- Track refusal/no-response streak for frustration messages
 local refusalStreak = 0
 
@@ -826,6 +827,7 @@ local function nextPlayer()
         local openingMsg = string.lower(target.Name) .. " " .. getRandomMessage()
         sendChatTyped(openingMsg)
         Stats.approached += 1
+        lastBeggingTime = tick()  -- bot actually sent a begging message
         startCircleDance(CIRCLE_COOLDOWN)
         task.wait(CIRCLE_COOLDOWN)
         local normElapsed = 0
@@ -970,7 +972,8 @@ end
 
 -- ==================== SERVER HOP FUNCTION ====================
 function serverHop(skipReturnHome)
-    lastActivityTime = tick()  -- reset watchdog so it doesn't double-fire during teleport
+    lastActivityTime = tick()   -- reset watchdog so it doesn't double-fire during teleport
+    lastBeggingTime  = tick()   -- reset so watchdog doesn't re-fire right after hop
     Stats.hops += 1
     log("[HOP] Starting server hop...")
     
@@ -1341,14 +1344,16 @@ end
 monitorDonations()
 startReporting()
 
--- ── Watchdog: if bot does nothing for 2 minutes, force server hop ──
+-- ── Watchdog: if bot hasn't actually begged in 3 minutes, force server hop ──
+-- (bot moving/chasing without begging doesn't count — we track lastBeggingTime)
 task.spawn(function()
-    local WATCHDOG_IDLE_LIMIT = 120  -- seconds
+    local BEG_IDLE_LIMIT = 180  -- 3 minutes without sending a single donation request
+    task.wait(60)               -- grace period at script start
     while true do
         task.wait(30)
-        local idle = tick() - lastActivityTime
-        if idle > WATCHDOG_IDLE_LIMIT then
-            log(string.format("[WATCHDOG] Bot idle for %.0fs (limit %ds) — force hopping!", idle, WATCHDOG_IDLE_LIMIT))
+        local sinceLastBeg = tick() - lastBeggingTime
+        if sinceLastBeg > BEG_IDLE_LIMIT then
+            log(string.format("[WATCHDOG] No begging for %.0fs — bot is stuck, force hopping!", sinceLastBeg))
             serverHop(true)
         end
     end

@@ -147,8 +147,9 @@ local Stats = {
     refused         = 0,
     no_response     = 0,
     hops            = 0,
-    donations       = 0,   -- number of confirmed donation events
-    robux_received  = 0,   -- total robux detected from chat messages
+    donations       = 0,   -- number of donation events (each time Raised grew)
+    robux_gross     = 0,   -- total R$ raised (before Roblox 40% cut)
+    raised_current  = 0,   -- current absolute Raised value shown on our booth
 }
 local sessionStart = tick()
 
@@ -1110,13 +1111,17 @@ local function monitorDonations()
             local ok, current = pcall(readRaised)
             if ok and current > lastRaised then
                 local delta = current - lastRaised
-                Stats.donations      += 1
-                Stats.robux_received += delta
-                log(string.format("[DONATE] +%d R$ received! Total: %d R$ across %d donations",
-                    delta, Stats.robux_received, Stats.donations))
+                Stats.donations     += 1
+                Stats.robux_gross   += delta
+                Stats.raised_current = current
+                local net = math.floor(delta * 0.6)
+                log(string.format(
+                    "[DONATE] +%d R$ raised (+%d net after 40%% fee) | Total: %d gross / %d net | %d donations",
+                    delta, net, Stats.robux_gross, math.floor(Stats.robux_gross * 0.6), Stats.donations))
                 lastRaised = current
             elseif ok then
-                lastRaised = current  -- keep in sync in case it resets on hop
+                Stats.raised_current = current
+                lastRaised = current
             end
         end
     end)
@@ -1130,18 +1135,19 @@ local function startReporting()
             task.wait(15)
             pcall(function()
                 local payload = HttpService:JSONEncode({
-                    id             = tostring(player.UserId),
-                    name           = player.Name,
-                    approached     = Stats.approached,
-                    agreed         = Stats.agreed,
-                    refused        = Stats.refused,
-                    no_response    = Stats.no_response,
-                    hops           = Stats.hops,
-                    donations      = Stats.donations,
-                    robux_received = Stats.robux_received,
-                    status         = "Active",
-                    job_id         = game.JobId,
-                    session_start  = sessionStart,
+                    id              = tostring(player.UserId),
+                    name            = player.Name,
+                    approached      = Stats.approached,
+                    agreed          = Stats.agreed,
+                    refused         = Stats.refused,
+                    no_response     = Stats.no_response,
+                    hops            = Stats.hops,
+                    donations       = Stats.donations,
+                    robux_gross     = Stats.robux_gross,
+                    raised_current  = Stats.raised_current,
+                    status          = "Active",
+                    job_id          = game.JobId,
+                    session_start   = sessionStart,
                 })
                 httprequest({
                     Url     = DASH_URL .. "/pd_update",

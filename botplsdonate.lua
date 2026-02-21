@@ -1048,37 +1048,111 @@ end
 end
 
 -- ==================== DONATION MONITOR ====================
--- Watches player.leaderstats.Raised for changes.
--- When Raised grows — that's a real donation. Delta = amount received.
--- Simplest and most reliable method, used by all popular PD scripts.
+-- Tries three methods in order, uses the first one that works.
+-- No double-counting: only one method runs at a time.
+--
+-- Method 1 (best): leaderstats.Raised.Changed  — event-driven, instant, exact delta
+-- Method 2 (good): ChatDonationAlert RemoteEvent — event-driven, gives tipper info
+-- Method 3 (fallback): BoothUI Raised text polling — works even without leaderstats
+
+local function onDonation(delta, source)
+    if delta <= 0 then return end
+    Stats.donations   += 1
+    Stats.robux_gross += delta
+    log(string.format(
+        "[DONATE/%s] +R$%d | Session total: R$%d gross / R$%d net | %d donations",
+        source, delta, Stats.robux_gross, math.floor(Stats.robux_gross * 0.6), Stats.donations))
+end
+
 local function monitorDonations()
     task.spawn(function()
-        -- Wait for leaderstats to appear (the game creates them on join)
-        local leaderstats = player:WaitForChild("leaderstats", 30)
-        if not leaderstats then
-            log("[DONATE] leaderstats not found — donation tracking disabled")
-            return
-        end
-        local raisedStat = leaderstats:WaitForChild("Raised", 15)
-        if not raisedStat then
-            log("[DONATE] leaderstats.Raised not found — donation tracking disabled")
-            return
-        end
+        local tracked = false
 
-        local lastRaised = raisedStat.Value
-        log(string.format("[DONATE] Watching leaderstats.Raised — current value: %d R$", lastRaised))
-
-        raisedStat.Changed:Connect(function(newValue)
-            local delta = newValue - lastRaised
-            if delta > 0 then
-                Stats.donations   += 1
-                Stats.robux_gross += delta
-                log(string.format(
-                    "[DONATE] +R$%d received! Total: R$%d gross / R$%d net (60%%) | %d donations",
-                    delta, Stats.robux_gross, math.floor(Stats.robux_gross * 0.6), Stats.donations))
-            end
-            lastRaised = newValue
+        -- ── METHOD 1: leaderstats.Raised.Changed ──────────────────────────
+        -- Used by: ALL popular PD bots (flackrunnerv2, littlepriceonu, etc.)
+        pcall(function()
+            local ls = player:WaitForChild("leaderstats", 15)
+            if not ls then return end
+            local raisedStat = ls:WaitForChild("Raised", 10)
+            if not raisedStat then return end
+            local last = raisedStat.Value
+            raisedStat.Changed:Connect(function(newVal)
+                onDonation(newVal - last, "LS")
+                last = newVal
+            end)
+            tracked = true
+            log(string.format("[DONATE] Method 1: leaderstats.Raised.Changed (current: R$%d)", raisedStat.Value))
         end)
+        if tracked then return end
+
+        -- ── METHOD 2: ChatDonationAlert RemoteEvent ────────────────────────
+        -- Used by: Stefanuk12, data list in littlepriceonu
+        pcall(function()
+            local Events = ReplicatedStorage:WaitForChild("Events", 15)
+            if not Events then return end
+            local alertEvent = Events:WaitForChild("ChatDonationAlert", 10)
+            if not alertEvent then return end
+            alertEvent.OnClientEvent:Connect(function(tipper, receiver, amount)
+                local isUs = (type(receiver) == "string")
+                    and (receiver == player.Name or receiver == player.DisplayName)
+                    or (receiver == player)
+                if not isUs then return end
+                local tipName = (type(tipper) == "string" and tipper)
+                             or (typeof(tipper) == "Instance" and tipper.Name) or "?"
+                onDonation(tonumber(amount) or 0, "CDA:" .. tipName)
+            end)
+            tracked = true
+            log("[DONATE] Method 2: ChatDonationAlert RemoteEvent")
+        end)
+        if tracked then return end
+
+        -- ── METHOD 3: BoothUI Raised text polling ─────────────────────────
+        -- Used by: littlepriceonu source.lua, flackrunnerv2
+        -- Format: "90 Raised" or "1,234 Raised" → split(" ")[1] → strip commas
+        pcall(function()
+            local boothUI = player.PlayerGui
+                :WaitForChild("MapUIContainer", 15)
+                :WaitForChild("MapUI", 10)
+                :WaitForChild("BoothUI", 10)
+            if not boothUI then return end
+
+            local ourBooth
+            for _ = 1, 30 do
+                for _, v in ipairs(boothUI:GetChildren()) do
+                    local details = v:FindFirstChild("Details")
+                    if details and details:FindFirstChild("Owner") then
+                        if details.Owner.Text:split("'")[1] == player.DisplayName then
+                            ourBooth = v; break
+                        end
+                    end
+                end
+                if ourBooth then break end
+                task.wait(1)
+            end
+            if not ourBooth then return end
+
+            local function readRaised()
+                local txt = ourBooth.Details.Raised.Text or "0"
+                return tonumber(txt:split(" ")[1]:gsub(",", "")) or 0
+            end
+
+            local last = readRaised()
+            tracked = true
+            log(string.format("[DONATE] Method 3: BoothUI polling (current: R$%d)", last))
+
+            while true do
+                task.wait(5)
+                local ok, cur = pcall(readRaised)
+                if ok then
+                    onDonation(cur - last, "UI")
+                    last = cur
+                end
+            end
+        end)
+
+        if not tracked then
+            log("[DONATE] All 3 methods failed — donation tracking disabled")
+        end
     end)
 end
 

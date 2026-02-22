@@ -794,6 +794,22 @@ local function resetResponse()
     responseReceived = false
 end
 
+-- Shared handler: runs on every chat message from any player
+local function onAnyChat(speakerName, msgLower)
+    if speakerName == player.Name then return end
+    -- Response detection (for active waitForResponse)
+    lastSpeaker      = speakerName
+    lastMessage      = msgLower
+    responseReceived = true
+    -- Mention detection: did they write our name?
+    local myNameLow     = string.lower(player.Name)
+    local myDisplayLow  = string.lower(player.DisplayName)
+    if string.find(msgLower, myNameLow, 1, true)
+    or (myDisplayLow ~= myNameLow and string.find(msgLower, myDisplayLow, 1, true)) then
+        onMentioned(speakerName)
+    end
+end
+
 -- Hook Legacy Chat
 spawn(function()
     local legacy = ReplicatedStorage:WaitForChild("DefaultChatSystemChatEvents", 5)
@@ -804,11 +820,7 @@ spawn(function()
                 local speaker = data.FromSpeaker
                 local msg = (data.Message or data.OriginalMessage or ""):lower()
                 log(speaker .. ": " .. msg)
-                if speaker and speaker ~= player.Name then
-                    lastSpeaker = speaker
-                    lastMessage = msg
-                    responseReceived = true
-                end
+                onAnyChat(speaker, msg)
             end)
         end
     end
@@ -827,11 +839,7 @@ spawn(function()
                             local speaker = source.Name
                             local text = (msgObj.Text or ""):lower()
                             log(speaker .. ": " .. text)
-                            if speaker ~= player.Name then
-                                lastSpeaker = speaker
-                                lastMessage = text
-                                responseReceived = true
-                            end
+                            onAnyChat(speaker, text)
                         end
                     end)
                 end
@@ -1073,16 +1081,68 @@ local function doIdleAction()
     end
 end
 
+-- ========= MENTION SYSTEM =========
+-- If someone writes the bot's name in chat, bot replies quickly and approaches them
+local mentionQueue   = {}  -- { [userId] = true }
+local mentionReplyCd = {}  -- { [userId] = tick() } per-player cooldown
+
+local MENTION_REPLIES = {
+    "yeah?",
+    "hi!",
+    "yes?",
+    "hey!",
+    "what's up",
+    "yea?",
+    "u called?",
+    "yeah what's up",
+    "oh hey!",
+}
+
+local function onMentioned(speakerName)
+    if speakerName == player.Name then return end
+    local mentioned = nil
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Name == speakerName then mentioned = p; break end
+    end
+    if not mentioned then return end
+    local uid = mentioned.UserId
+    -- 30s per-player cooldown so bot doesn't spam replies
+    local now = tick()
+    if mentionReplyCd[uid] and now - mentionReplyCd[uid] < 30 then return end
+    mentionReplyCd[uid] = now
+    -- Prioritise this player for next approach
+    mentionQueue[uid] = true
+    ignoreList[uid]   = nil  -- remove from ignore if they were there
+    log("[MENTION] " .. speakerName .. " mentioned bot — queued for priority approach")
+    -- Quick natural reply with short random delay (looks human)
+    task.spawn(function()
+        task.wait(math.random() * 1.0 + 0.4)
+        sendChat(MENTION_REPLIES[math.random(#MENTION_REPLIES)])
+    end)
+end
+
 local function findClosest()
     if not player.Character then return nil end
     local root = player.Character:FindFirstChild("HumanoidRootPart")
     if not root then return nil end
-    local best, bestDist = nil, math.huge
     local allPlayers = Players:GetPlayers()
-    if not allPlayers then
-        log("[DEBUG] Players:GetPlayers() returned nil!")
-        return nil
+    if not allPlayers then return nil end
+
+    -- Priority: players who mentioned the bot by name
+    for uid, _ in pairs(mentionQueue) do
+        for _, p in ipairs(allPlayers) do
+            if p.UserId == uid and p ~= player and not BOT_ACCOUNTS[p.Name]
+               and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                mentionQueue[uid] = nil
+                log(string.format("[FIND] Priority target (mentioned bot): %s", p.Name))
+                return p
+            end
+        end
+        mentionQueue[uid] = nil  -- player left, clean up
     end
+
+    -- Normal: closest player not in ignoreList
+    local best, bestDist = nil, math.huge
     for _, p in ipairs(allPlayers) do
         if p ~= player
             and p.UserId

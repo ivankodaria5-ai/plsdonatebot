@@ -222,30 +222,16 @@ local httprequest = (syn and syn.request) or http and http.request or http_reque
 local queueFunc = queueonteleport or queue_on_teleport or (syn and syn.queue_on_teleport) or function() log("[HOP] Queue not supported!") end
 
 -- ==================== SINGLETON GUARD ====================
--- Only ONE instance runs at a time. New inject → old instance loops exit.
+-- Only ONE instance runs at a time.
+-- New inject sets PD_RUNNING_ID → old instance's isActiveInstance() returns false → loops exit.
 local myInstanceId = tick()
 
 if getgenv then
-    -- Save the TRUE original task.wait only on first ever inject (prevents hook-chain)
-    if not getgenv().PD_ORIG_WAIT then
-        getgenv().PD_ORIG_WAIT = task.wait
-    end
-    local _origWait = getgenv().PD_ORIG_WAIT
-
     local prevId = getgenv().PD_RUNNING_ID
     if prevId and prevId ~= 0 then
-        log("[SINGLETON] Replacing instance " .. tostring(prevId) .. " with " .. tostring(myInstanceId))
+        log("[SINGLETON] Replacing old instance — only this one will run now")
     end
     getgenv().PD_RUNNING_ID = myInstanceId
-
-    -- Override task.wait so old coroutines error out on next yield
-    -- Always calls the TRUE original (never chains)
-    task.wait = function(t)
-        if getgenv().PD_RUNNING_ID ~= myInstanceId then
-            error("__PD_SINGLETON_KILL__", 0)
-        end
-        return _origWait(t)
-    end
 end
 
 local function isActiveInstance()

@@ -102,15 +102,82 @@ local NO_RESPONSE_MSGS = {
     "okay bye then lol",
 }
 
-local SECOND_ATTEMPT_MSGS = {
-    "maybe just 5 robux? :(",
-    "pleeeease? just a tiny bit?",
-    "are you sure? even just a little?",
-    "can u reconsider? any amount helps :)",
-    "even 1 robux would help :(",
-    "pretty please? :c",
-    "last chance pls? :(",
+-- Guilt-trip second message (sent after refusal, no wait for response)
+local MSGS_SECOND = {
+    "aw man 😔 okay... no worries i guess",
+    "oh ok 😢 i'll keep trying...",
+    "damn okay 😔 maybe next time",
+    "np i understand 😢 just trying my best out here",
+    "ok fine 😔 sorry for bothering",
 }
+
+-- Contextual message pools by target's Raised amount
+local MSGS_EMPTY = {
+    "hey! saving up for my dream item, could you spare a little? 🙏",
+    "hi! trying to reach my goal, any donation helps! 😊",
+    "hey, would mean a lot if you helped me get closer to my goal 💙",
+    "saving up for something special, even 1 robux counts! 🌟",
+}
+local MSGS_LOW = {
+    "hey! we're both grinding, support each other? 🤝",
+    "hi! small donation? every bit helps fr 🙏",
+    "hey could you help me out a little? 😊",
+    "we both know the grind, spare some robux? 💙",
+}
+local MSGS_MID = {
+    "yo! you're doing well, spare some robux for me? 😄",
+    "hey generous one! mind helping me out? 🙏",
+    "hi! you look like someone who spreads the love 💙 donate?",
+    "you've got donations, share the vibe? 😊",
+}
+local MSGS_RICH = {
+    "yo bro you look generous, spare some robux? 🙏",
+    "big donator energy right here 👀 help me out?",
+    "you clearly know how to make people's day 😄 my turn?",
+    "ok you're literally the most generous looking person here, donate? 🔥",
+}
+local MSGS_LEAVING = {
+    "i'm leaving this server soon, last chance 😅",
+    "hopping servers in a bit, donate before i go? 🙏",
+    "about to leave, anyone wanna donate real quick? 😊",
+    "last round before i hop, someone be a legend 🔥",
+}
+local COMPLIMENTS = {
+    "nice outfit! 🔥",
+    "your booth looks really cool! 💙",
+    "bro your style is 10/10 😄",
+    "love the fit ngl 👀",
+    "your booth setup is clean fr",
+    "you seem like a cool person ngl 😊",
+    "ok your avatar is actually fire 🔥",
+}
+local MSGS_GOODBYE = {
+    "no worries, gl with your booth! 🤝",
+    "all good, have fun! 😊",
+    "np! good luck today 💙",
+    "okay no worries! enjoy the game 🤝",
+    "all g, have a good one! ✌️",
+}
+local MSGS_THANKS = {
+    "hey! just wanted to say thank you so much for the donation!! 💙🙏",
+    "bro i had to come back and say THANK YOU 🎉 means a lot!!",
+    "omg thank you again!! you made my day fr 💙",
+    "seriously thank you, you're the best!! 🔥",
+}
+
+-- Dream item goal (chosen once at script start)
+local DREAM_ITEMS = {
+    {name = "Headless Horseman", price = 31000},
+    {name = "Korblox",           price = 17000},
+    {name = "a domino crown",    price = 10300},
+    {name = "my dream gamepass", price = 1000},
+    {name = "a limited item",    price = 5000},
+    {name = "my favorite UGC hat", price = 800},
+}
+local dreamItem = DREAM_ITEMS[math.random(#DREAM_ITEMS)]
+local function getNeeded()
+    return math.max(dreamItem.price - Stats.robux_gross, 50)
+end
 
 local FRUSTRATION_MSGS = {
     "today is not my day...",
@@ -142,6 +209,12 @@ local lastActivityTime      = tick()  -- watchdog: time of last meaningful actio
 local lastBeggingTime       = tick()  -- watchdog: time of last actual donation request sent
 -- Track refusal/no-response streak for frustration messages
 local refusalStreak = 0
+-- Leaving-soon flag (set ~90s before watchdog-triggered server hop)
+local leavingSoon   = false
+-- Congrats cooldown: don't spam when many donations fire at once
+local lastCongratTs = 0
+-- Donors to thank after 2-3 min: { [name] = {ts, thanked} }
+local recentDonors  = {}
 
 -- ==================== STATISTICS ====================
 local Stats = {
@@ -1018,15 +1091,91 @@ end
 -- ========= MESSAGE WITH TYPO CHANCE =========
 local function getRandomMessage()
     local msgIndex = math.random(#MESSAGES)
-    
-    -- Roll for typo chance
     if math.random() < TYPO_CHANCE then
-        -- Pick a random typo variant (1-3)
-        local typoVariant = math.random(3)
-        return MESSAGE_TYPOS[msgIndex][typoVariant]
+        return MESSAGE_TYPOS[msgIndex][math.random(3)]
     else
         return MESSAGES[msgIndex]
     end
+end
+
+-- ========= CONTEXT-AWARE FIRST MESSAGE =========
+
+-- Read the Raised amount from a target player's booth (from our own PlayerGui copy of the BoothUI)
+local function getPlayerRaised(t)
+    local ok, result = pcall(function()
+        local gui = player.PlayerGui
+        local mc = gui:FindFirstChild("MapUIContainer") or workspace:FindFirstChild("MapUIContainer")
+        if not mc then return nil end
+        local mapUI = mc:FindFirstChild("MapUI")
+        if not mapUI then return nil end
+        local bui = mapUI:FindFirstChild("BoothUI")
+        if not bui then return nil end
+        local tName    = tostring(t.Name)
+        local tDisplay = tostring(t.DisplayName)
+        for _, frame in ipairs(bui:GetChildren()) do
+            local det   = frame:FindFirstChild("Details")
+            local owner = det and det:FindFirstChild("Owner")
+            if owner then
+                local txt = tostring(owner.Text or "")
+                if string.find(txt, tName, 1, true) or string.find(txt, tDisplay, 1, true) then
+                    local raised = det:FindFirstChild("Raised")
+                    if raised then
+                        local num = tostring(raised.Text or "0"):split(" ")[1]:gsub(",", "")
+                        return tonumber(num) or 0
+                    end
+                end
+            end
+        end
+        return nil
+    end)
+    return ok and result or nil
+end
+
+local function getMsgCategory(raised)
+    if raised == nil or raised == 0 then return "empty" end
+    if raised <= 500  then return "low"   end
+    if raised <= 2000 then return "mid"   end
+    return "rich"
+end
+
+-- 40% chance to prepend player's name to a message
+local function addName(msg, t)
+    if math.random(10) <= 4 then
+        return "hey " .. t.Name .. "! " .. msg
+    end
+    return msg
+end
+
+-- Build the opening donation request (context-aware pool + optional dream-item line)
+local function getFirstMsg(t)
+    local raised = getPlayerRaised(t)
+    local cat    = getMsgCategory(raised)
+
+    -- Dream-item line appears ~25% of the time instead of pool message
+    local useDreamLine = math.random(4) == 1
+    local pool
+    if cat == "empty" then pool = MSGS_EMPTY
+    elseif cat == "low" then pool = MSGS_LOW
+    elseif cat == "mid" then pool = MSGS_MID
+    else                     pool = MSGS_RICH
+    end
+
+    local base
+    if leavingSoon and math.random(2) == 1 then
+        -- 50% chance to use "leaving soon" urgency message
+        base = MSGS_LEAVING[math.random(#MSGS_LEAVING)]
+    elseif useDreamLine then
+        local need = getNeeded()
+        local dreamLines = {
+            "saving up for " .. dreamItem.name .. ", need just " .. need .. " more robux 🙏",
+            "trying to get " .. dreamItem.name .. "! only " .. need .. " robux away 😊",
+        }
+        base = dreamLines[math.random(#dreamLines)]
+    else
+        base = pool[math.random(#pool)]
+    end
+
+    return addName(base, t)
 end
 
 -- ========= MAIN LOGIC WITH CHAT RESPONSE =========
@@ -1045,10 +1194,16 @@ local function nextPlayer()
     doIdleAction()
 
     if chasePlayer(target) then
-        local openingMsg = string.lower(target.Name) .. " " .. getRandomMessage()
+        -- Compliment first (reciprocity principle), then donation request
+        local compliment = COMPLIMENTS[math.random(#COMPLIMENTS)]
+        sendChatTyped(compliment)
+        task.wait(math.random() * 0.5 + 1.5)   -- 1.5–2.0s pause
+
+        local openingMsg = getFirstMsg(target)  -- context-aware pool + optional name + leavingSoon
         sendChatTyped(openingMsg)
         Stats.approached += 1
-        lastBeggingTime = tick()  -- bot actually sent a begging message
+        lastBeggingTime = tick()
+        leavingSoon = false  -- reset once we've actually sent a message
         startCircleDance(CIRCLE_COOLDOWN)
         task.wait(CIRCLE_COOLDOWN)
         local normElapsed = 0
@@ -1063,6 +1218,7 @@ local function nextPlayer()
         local function waitForResponse(waitTime)
             resetResponse()
             local start = tick()
+            local lastTargetPos = nil
             while tick() - start < waitTime do
                 if not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
                     log("[WAIT] Target left")
@@ -1071,21 +1227,25 @@ local function nextPlayer()
                 local root       = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
                 local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
                 if root and targetRoot then
-                    -- Always position bot 3 studs in front of the player's face
-                    local frontPos = targetRoot.Position + targetRoot.CFrame.LookVector * 3
-                    frontPos = Vector3.new(frontPos.X, targetRoot.Position.Y, frontPos.Z)
-                    local distToIdeal = (root.Position - frontPos).Magnitude
-                    local humanoid = player.Character:FindFirstChild("Humanoid")
-                    if humanoid then
-                        if distToIdeal > 1.5 then
-                            humanoid:MoveTo(frontPos)
-                        end
+                    local targetPos = targetRoot.Position
+                    -- If player ran more than 20 studs away — treat as left
+                    if (root.Position - targetPos).Magnitude > 20 then
+                        log("[WAIT] Target moved >20 studs — treating as left")
+                        return "left", ""
+                    end
+                    -- Re-position only when player moved >3 studs (saves CPU, looks natural)
+                    if lastTargetPos == nil or (targetPos - lastTargetPos).Magnitude > 3 then
+                        lastTargetPos = targetPos
+                        local frontPos = targetRoot.Position + targetRoot.CFrame.LookVector * 3
+                        frontPos = Vector3.new(frontPos.X, targetRoot.Position.Y, frontPos.Z)
+                        local humanoid = player.Character:FindFirstChild("Humanoid")
+                        if humanoid then humanoid:MoveTo(frontPos) end
                     end
                     faceTargetBriefly(target)
                 end
                 if responseReceived and lastSpeaker == target.Name then
                     local msg = lastMessage
-                    lastActivityTime = tick()  -- got a reply — bot is active
+                    lastActivityTime = tick()
                     log("[RESPONSE] " .. target.Name .. " said: " .. msg)
                     local saidYes = false
                     for _, word in ipairs(YES_LIST) do
@@ -1098,7 +1258,7 @@ local function nextPlayer()
                     if saidYes then return "yes", msg end
                     if saidNo  then return "no",  msg end
                 end
-                task.wait(0.1)
+                task.wait(0.3)
             end
             return "timeout", ""
         end
@@ -1124,34 +1284,23 @@ local function nextPlayer()
             sendChat(MSG_OK_FINE)
             task.wait(math.random() * 0.7 + 0.8)
 
-            -- 30% chance: second attempt
+            -- 30% chance: guilt-trip second message (no wait — just write and walk away)
             if math.random() < SECOND_ATTEMPT_CHANCE then
-                local attempt2 = SECOND_ATTEMPT_MSGS[math.random(#SECOND_ATTEMPT_MSGS)]
+                local attempt2 = MSGS_SECOND[math.random(#MSGS_SECOND)]
                 sendChatTyped(attempt2)
-                log("[RETRY] Second attempt: " .. attempt2)
-                local result2, reply2 = waitForResponse(5)
-                if result2 == "yes" then
-                    sendChat(MSG_FOLLOW_ME)
-                    returnHome()
-                    sendChat(MSG_HERE_IS_HOUSE)
-                    ignoreList[target.UserId] = true
-                    Stats.agreed += 1
-                    refusalStreak = 0
-                    -- log both attempts in one record
-                    logInteraction(target.Name,
-                        openingMsg .. " → [refused] → " .. attempt2,
-                        playerReply .. " / " .. reply2,
-                        "agreed_2nd")
-                    task.wait(2)
-                    return true
-                end
-                -- second attempt also failed
+                log("[RETRY] Guilt-trip: " .. attempt2)
+                task.wait(0.5)
                 logInteraction(target.Name,
                     openingMsg .. " → [refused] → " .. attempt2,
-                    playerReply .. " / " .. reply2,
-                    "refused")
+                    playerReply, "refused")
             else
                 logInteraction(target.Name, openingMsg, playerReply, "refused")
+            end
+
+            -- 60% chance: dignified goodbye
+            if math.random() < 0.60 then
+                task.wait(0.5)
+                sendChatTyped(MSGS_GOODBYE[math.random(#MSGS_GOODBYE)])
             end
 
             ignoreList[target.UserId] = true
@@ -1169,6 +1318,11 @@ local function nextPlayer()
             -- ── No response / left ──
             local noRespMsg = NO_RESPONSE_MSGS[math.random(#NO_RESPONSE_MSGS)]
             sendChatTyped(noRespMsg)
+            -- 60% chance: goodbye (only if they didn't physically leave)
+            if result ~= "left" and math.random() < 0.60 then
+                task.wait(0.5)
+                sendChatTyped(MSGS_GOODBYE[math.random(#MSGS_GOODBYE)])
+            end
             log("[WAIT] No valid reply from " .. target.Name .. " — moving on")
             ignoreList[target.UserId] = true
             Stats.no_response += 1
@@ -1355,12 +1509,32 @@ local function monitorDonations()
                 local isUs = (type(receiver) == "string")
                     and (receiver == player.Name or receiver == player.DisplayName)
                     or (receiver == player)
-                if not isUs then return end
-                local amt = tonumber(amount) or 0
-                Stats.raised_current += amt
                 local tipName = (type(tipper) == "string" and tipper)
                              or (typeof(tipper) == "Instance" and tipper.Name) or "?"
-                onDonation(amt, "CDA:" .. tipName)
+                if isUs then
+                    local amt = tonumber(amount) or 0
+                    Stats.raised_current += amt
+                    onDonation(amt, "CDA:" .. tipName)
+                    -- Queue for deferred thank-you approach (2–3 min later)
+                    recentDonors[tipName] = {ts = os.time(), thanked = false}
+                else
+                    -- Someone else received a donation — react with congrats (max once/30s)
+                    local now = os.time()
+                    if now - lastCongratTs >= 30 then
+                        lastCongratTs = now
+                        local CONGRATS = {
+                            "omg congrats!! 🎉",
+                            "yoo nice donation!! 🎉",
+                            "aww that's so sweet 💙",
+                            "goals fr 🔥",
+                            "love to see it!! 🎉",
+                        }
+                        task.spawn(function()
+                            task.wait(math.random(5, 20) / 10)
+                            sendChat(CONGRATS[math.random(#CONGRATS)])
+                        end)
+                    end
+                end
             end)
             tracked = true
             log("[DONATE] Method 2: ChatDonationAlert RemoteEvent")
@@ -1521,20 +1695,58 @@ monitorDonations()
 startReporting()
 
 -- ── Watchdog: if bot hasn't actually begged in 3 minutes, force server hop ──
--- (bot moving/chasing without begging doesn't count — we track lastBeggingTime)
+-- At 90s idle → enable leavingSoon messages; at 180s → force hop.
 task.spawn(function()
-    local BEG_IDLE_LIMIT = 180  -- 3 minutes without sending a single donation request
-    task.wait(60)               -- grace period at script start
+    local BEG_IDLE_LIMIT = 180
+    task.wait(60)
     while isActiveInstance() do
         task.wait(30)
         if not isActiveInstance() then break end
         local sinceLastBeg = tick() - lastBeggingTime
+        if sinceLastBeg > 90 and not leavingSoon then
+            leavingSoon = true
+            log("[WATCHDOG] Idle 90s — leavingSoon enabled")
+        end
         if sinceLastBeg > BEG_IDLE_LIMIT then
-            log(string.format("[WATCHDOG] No begging for %.0fs — bot is stuck, force hopping!", sinceLastBeg))
+            leavingSoon = false
+            log(string.format("[WATCHDOG] No begging for %.0fs — force hopping!", sinceLastBeg))
             serverHop(true)
         end
     end
     log("[SINGLETON] Watchdog exiting (new instance took over)")
+end)
+
+-- ── Thank-you loop: approach donors 2–3 min after they donated ──
+task.spawn(function()
+    while isActiveInstance() do
+        task.wait(30)
+        if not isActiveInstance() then break end
+        local now = os.time()
+        for tipName, info in pairs(recentDonors) do
+            if not info.thanked and (now - info.ts) >= math.random(120, 180) then
+                -- Find the donor on this server
+                local donor = nil
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Name == tipName or p.DisplayName == tipName then
+                        donor = p; break
+                    end
+                end
+                if donor and donor.Character and donor.Character:FindFirstChild("HumanoidRootPart") then
+                    info.thanked = true
+                    task.spawn(function()
+                        log("[THANKS] Going to thank " .. tipName)
+                        if chasePlayer(donor) then
+                            local msg = MSGS_THANKS[math.random(#MSGS_THANKS)]
+                            sendChatTyped(msg)
+                            logInteraction(tipName, msg, "", "thanked")
+                        end
+                    end)
+                elseif (now - info.ts) > 300 then
+                    recentDonors[tipName] = nil  -- donor left or 5min passed
+                end
+            end
+        end
+    end
 end)
 
 -- Main loop: greet everyone, then wait for new arrivals before hopping

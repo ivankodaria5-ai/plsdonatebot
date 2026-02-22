@@ -1102,28 +1102,32 @@ function serverHop(skipReturnHome)
 
     local cursor         = ""
     local hopStart       = tick()
-    local MAX_HOP_TIME   = 300  -- 5 min max in serverHop before emergency fallback
+    local MAX_HOP_TIME   = 120  -- 2 min max in serverHop before emergency fallback
     local rate429Count   = 0    -- consecutive 429 errors
-    local MAX_429_BEFORE_FALLBACK = 4  -- after 4x429 → teleport directly
+    local total429Count  = 0    -- total 429s this entire hop session
+    local MAX_429_BEFORE_FALLBACK = 3  -- after 3 consecutive 429s → teleport directly
+    local MAX_TOTAL_429  = 5    -- after 5 total 429s → always emergency (even if non-consecutive)
 
     -- Emergency fallback: direct teleport without API (goes to random server)
     local function emergencyTeleport(reason)
-        log("[HOP] ⚡ Emergency fallback (" .. reason .. ") — teleporting directly to random server")
+        log("[HOP] ⚡ Emergency fallback (" .. reason .. ") — kicking to random server")
         queueFunc([[
 local httprequest = (syn and syn.request) or http and http.request or http_request or (fluxus and fluxus.request) or request
 local response = httprequest({Url = "]] .. SCRIPT_URL .. [["})
 if response and response.Body then loadstring(response.Body)()
 else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
 ]])
+        -- Try TeleportService first, kick as guaranteed fallback
         local ok = pcall(function()
             TeleportService:Teleport(PLACE_ID, player)
         end)
+        task.wait(5)  -- give teleport a moment
         if not ok then
-            -- Last resort: kick self to force reconnect
-            log("[HOP] Teleport failed — kicking self to force rejoin")
-            player:Kick("Rejoining server...")
+            log("[HOP] Teleport API failed — kicking self to force rejoin")
         end
-        waitWithMovement(180)  -- wait for teleport/rejoin
+        -- Always kick as the reliable backup (script will restart via queueFunc)
+        pcall(function() player:Kick("Rejoining server...") end)
+        task.wait(60)  -- wait for kick/teleport (after kick script is dead anyway)
     end
 
     while true do
@@ -1159,21 +1163,23 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
         
         -- Check for 429 Too Many Requests
         if response.StatusCode == 429 then
-            rate429Count += 1
-            local cooldown = math.min(30 * rate429Count, 120)  -- exponential backoff, max 120s
-            log(string.format("[HOP] ⚠️ 429 Too Many Requests! (x%d) Cooling down for %ds...", rate429Count, cooldown))
-            if rate429Count >= MAX_429_BEFORE_FALLBACK then
-                emergencyTeleport(rate429Count .. "x 429 errors")
+            rate429Count  += 1
+            total429Count += 1
+            local cooldown = math.min(15 * rate429Count, 60)  -- max 60s cooldown (was 120s)
+            log(string.format("[HOP] ⚠️ 429 Too Many Requests! (consec=%d, total=%d) Cooling %ds...", rate429Count, total429Count, cooldown))
+            if rate429Count >= MAX_429_BEFORE_FALLBACK or total429Count >= MAX_TOTAL_429 then
+                emergencyTeleport(string.format("%dx consec / %dx total 429", rate429Count, total429Count))
                 hopStart = tick()
                 cursor   = ""
-                rate429Count = 0
+                rate429Count  = 0
+                total429Count = 0
             else
                 waitWithMovement(cooldown)
                 cursor = ""
             end
             continue
         end
-        rate429Count = 0  -- reset on successful response
+        rate429Count = 0  -- reset consecutive on any success (total429Count keeps accumulating)
         
         if not response.Body then
             log("[HOP] Response has no Body field! Likely rate-limited by Roblox.")

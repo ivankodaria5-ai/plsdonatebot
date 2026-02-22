@@ -1463,7 +1463,7 @@ local function startReporting()
                     Body    = body,
                 })
             end)
-            task.wait(10)
+            task.wait(5)  -- report every 5s (was 10s) — keeps dashboard alive during long hops
         end
     end)
 end

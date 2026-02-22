@@ -1183,11 +1183,11 @@ local function getFirstMsg(t)
     if leavingSoon and math.random(2) == 1 then
         base = MSGS_LEAVING[math.random(#MSGS_LEAVING)]
     elseif useDreamLine then
-        local need = getNeeded()
         local dreamLines = {
-            "saving up for " .. dreamItem.name .. " need " .. need .. " more robux",
-            "trying to get " .. dreamItem.name .. " only " .. need .. " away",
-            "so close to getting " .. dreamItem.name .. " just " .. need .. " more",
+            "saving up for " .. dreamItem.name .. " donate pls",
+            "trying to get " .. dreamItem.name .. " any help appreciated",
+            "so close to getting " .. dreamItem.name .. " help me out?",
+            "want " .. dreamItem.name .. " so bad, any donation helps",
         }
         base = dreamLines[math.random(#dreamLines)]
     else
@@ -1224,12 +1224,40 @@ local function nextPlayer()
         lastBeggingTime = tick()
         leavingSoon = false  -- reset once we've actually sent a message
         startCircleDance(CIRCLE_COOLDOWN)
-        task.wait(CIRCLE_COOLDOWN)
+        -- Circle-dance phase: keep following while spinning
+        do
+            local elapsed = 0
+            while elapsed < CIRCLE_COOLDOWN do
+                task.wait(0.2)
+                elapsed += 0.2
+                local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                local tr = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+                local h = player.Character and player.Character:FindFirstChild("Humanoid")
+                if r and tr and h then
+                    local fp = Vector3.new(
+                        (tr.Position + tr.CFrame.LookVector * 2).X,
+                        tr.Position.Y,
+                        (tr.Position + tr.CFrame.LookVector * 2).Z)
+                    if (r.Position - fp).Magnitude > 3 then h:MoveTo(fp) end
+                end
+            end
+        end
+        -- Normal cooldown: face + follow
         local normElapsed = 0
         while normElapsed < NORMAL_COOLDOWN do
             task.wait(0.1)
             normElapsed += 0.1
             faceTargetBriefly(target)
+            local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            local tr = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+            local h = player.Character and player.Character:FindFirstChild("Humanoid")
+            if r and tr and h then
+                local fp = Vector3.new(
+                    (tr.Position + tr.CFrame.LookVector * 2).X,
+                    tr.Position.Y,
+                    (tr.Position + tr.CFrame.LookVector * 2).Z)
+                if (r.Position - fp).Magnitude > 3 then h:MoveTo(fp) end
+            end
         end
 
         -- ── Wait for response helper ──────────────────────────────
@@ -1237,7 +1265,6 @@ local function nextPlayer()
         local function waitForResponse(waitTime)
             resetResponse()
             local start = tick()
-            local lastTargetPos = nil
             while tick() - start < waitTime do
                 if not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
                     log("[WAIT] Target left")
@@ -1252,13 +1279,14 @@ local function nextPlayer()
                         log("[WAIT] Target moved >20 studs — treating as left")
                         return "left", ""
                     end
-                    -- Re-position only when player moved >3 studs (saves CPU, looks natural)
-                    if lastTargetPos == nil or (targetPos - lastTargetPos).Magnitude > 3 then
-                        lastTargetPos = targetPos
-                        local frontPos = targetRoot.Position + targetRoot.CFrame.LookVector * 3
-                        frontPos = Vector3.new(frontPos.X, targetRoot.Position.Y, frontPos.Z)
-                        local humanoid = player.Character:FindFirstChild("Humanoid")
-                        if humanoid then humanoid:MoveTo(frontPos) end
+                    -- Always stay 2 studs in front of player's face
+                    local frontPos = Vector3.new(
+                        (targetRoot.Position + targetRoot.CFrame.LookVector * 2).X,
+                        targetRoot.Position.Y,
+                        (targetRoot.Position + targetRoot.CFrame.LookVector * 2).Z)
+                    local humanoid = player.Character:FindFirstChild("Humanoid")
+                    if humanoid and (root.Position - frontPos).Magnitude > 2 then
+                        humanoid:MoveTo(frontPos)
                     end
                     faceTargetBriefly(target)
                 end
@@ -1277,7 +1305,7 @@ local function nextPlayer()
                     if saidYes then return "yes", msg end
                     if saidNo  then return "no",  msg end
                 end
-                task.wait(0.3)
+                task.wait(0.2)
             end
             return "timeout", ""
         end

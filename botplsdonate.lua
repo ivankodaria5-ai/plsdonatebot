@@ -222,32 +222,29 @@ local httprequest = (syn and syn.request) or http and http.request or http_reque
 local queueFunc = queueonteleport or queue_on_teleport or (syn and syn.queue_on_teleport) or function() log("[HOP] Queue not supported!") end
 
 -- ==================== SINGLETON GUARD ====================
--- Kills ALL previous instances (even old code without guard) by hooking task.wait.
--- Any coroutine from a previous instance will error on next yield → dies immediately.
+-- Only ONE instance runs at a time. New inject → old instance loops exit.
 local myInstanceId = tick()
 
 if getgenv then
+    -- Save the TRUE original task.wait only on first ever inject (prevents hook-chain)
+    if not getgenv().PD_ORIG_WAIT then
+        getgenv().PD_ORIG_WAIT = task.wait
+    end
+    local _origWait = getgenv().PD_ORIG_WAIT
+
     local prevId = getgenv().PD_RUNNING_ID
     if prevId and prevId ~= 0 then
-        log("[SINGLETON] Killing previous instance(s) — setting PD_RUNNING_ID=" .. myInstanceId)
+        log("[SINGLETON] Replacing instance " .. tostring(prevId) .. " with " .. tostring(myInstanceId))
     end
     getgenv().PD_RUNNING_ID = myInstanceId
 
-    -- Hook task.wait globally: old coroutines error out on next yield
-    local _realWait = task.wait
+    -- Override task.wait so old coroutines error out on next yield
+    -- Always calls the TRUE original (never chains)
     task.wait = function(t)
         if getgenv().PD_RUNNING_ID ~= myInstanceId then
             error("__PD_SINGLETON_KILL__", 0)
         end
-        return _realWait(t)
-    end
-    -- Also hook wait() (legacy)
-    local _realWaitLeg = wait
-    wait = function(t)
-        if getgenv().PD_RUNNING_ID ~= myInstanceId then
-            error("__PD_SINGLETON_KILL__", 0)
-        end
-        return _realWaitLeg(t)
+        return _origWait(t)
     end
 end
 

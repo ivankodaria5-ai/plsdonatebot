@@ -1067,229 +1067,96 @@ end
 
 -- ==================== SERVER HOP FUNCTION ====================
 function serverHop(skipReturnHome)
-    lastActivityTime = tick()   -- reset watchdog so it doesn't double-fire during teleport
-    lastBeggingTime  = tick()   -- reset so watchdog doesn't re-fire right after hop
+    lastActivityTime = tick()
+    lastBeggingTime  = tick()
     Stats.hops += 1
     log("[HOP] Starting server hop...")
-    
-    -- Return home before hopping (unless we're stuck and can't move)
-    if not skipReturnHome then
-        local success = returnHome()
-        if not success then
-            log("[HOP] returnHome failed, continuing anyway...")
-        end
-        task.wait(1)
-    else
-        log("[HOP] Skipping returnHome due to stuck state, doing keyboard movement")
-        -- Use keyboard input instead of MoveTo since we're stuck
-        task.spawn(function()
-            for i = 1, 20 do
-                VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
-                task.wait(0.1)
-                VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
-                task.wait(0.1)
-            end
-        end)
-        task.wait(2)
-    end
-    
-    log("[HOP] Beginning server search...")
 
-    -- Stagger bots: random delay so multiple bots don't hammer API simultaneously
-    local stagger = math.random(1, 12)
-    log("[HOP] Stagger delay: " .. stagger .. "s (avoids API rate-limits with multiple bots)")
-    waitWithMovement(stagger)
-
-    local cursor         = ""
-    local hopStart       = tick()
-    local MAX_HOP_TIME   = 120  -- 2 min max in serverHop before emergency fallback
-    local rate429Count   = 0    -- consecutive 429 errors
-    local total429Count  = 0    -- total 429s this entire hop session
-    local MAX_429_BEFORE_FALLBACK = 3  -- after 3 consecutive 429s → teleport directly
-    local MAX_TOTAL_429  = 5    -- after 5 total 429s → always emergency (even if non-consecutive)
-
-    -- Emergency fallback: direct teleport without API (goes to random server)
-    local function emergencyTeleport(reason)
-        log("[HOP] ⚡ Emergency fallback (" .. reason .. ") — kicking to random server")
-        queueFunc([[
+    -- Pre-queue the script so it auto-starts after rejoin/teleport
+    local RELOAD_CODE = [[
 local httprequest = (syn and syn.request) or http and http.request or http_request or (fluxus and fluxus.request) or request
 local response = httprequest({Url = "]] .. SCRIPT_URL .. [["})
 if response and response.Body then loadstring(response.Body)()
 else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
-]])
-        -- Try TeleportService first, kick as guaranteed fallback
-        local ok = pcall(function()
-            TeleportService:Teleport(PLACE_ID, player)
-        end)
-        task.wait(5)  -- give teleport a moment
-        if not ok then
-            log("[HOP] Teleport API failed — kicking self to force rejoin")
-        end
-        -- Always kick as the reliable backup (script will restart via queueFunc)
-        pcall(function() player:Kick("Rejoining server...") end)
-        task.wait(60)  -- wait for kick/teleport (after kick script is dead anyway)
+]]
+    queueFunc(RELOAD_CODE)
+
+    -- Go home if not stuck
+    if not skipReturnHome then
+        pcall(returnHome)
+        task.wait(1)
     end
 
-    while true do
-        -- Hard timeout: if stuck searching for >5 minutes, emergency teleport
-        if tick() - hopStart > MAX_HOP_TIME then
-            emergencyTeleport("5min timeout")
-            hopStart = tick()
-            cursor   = ""
-            rate429Count = 0
-        end
+    -- Stagger so multiple bots on same IP don't hit API at the exact same time
+    local stagger = math.random(2, 8)
+    log("[HOP] Stagger " .. stagger .. "s...")
+    waitWithMovement(stagger)
 
-        -- Simple 5 second delay between requests
-        waitWithMovement(5)
-        
-        local url = string.format(
-            "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100%s",
-            PLACE_ID,
-            cursor ~= "" and "&cursor=" .. cursor or ""
-        )
-        
-        local success, response = pcall(function()
-            return httprequest({Url = url})
-        end)
-        
-        if not success or not response then
-            log("[HOP] HTTP request failed, retrying...")
-            if not success then
-                log("[HOP DEBUG] Request error: " .. tostring(response))
-            end
-            waitWithMovement(10)
-            continue
-        end
-        
-        -- Check for 429 Too Many Requests
-        if response.StatusCode == 429 then
-            rate429Count  += 1
-            total429Count += 1
-            local cooldown = math.min(15 * rate429Count, 60)  -- max 60s cooldown (was 120s)
-            log(string.format("[HOP] ⚠️ 429 Too Many Requests! (consec=%d, total=%d) Cooling %ds...", rate429Count, total429Count, cooldown))
-            if rate429Count >= MAX_429_BEFORE_FALLBACK or total429Count >= MAX_TOTAL_429 then
-                emergencyTeleport(string.format("%dx consec / %dx total 429", rate429Count, total429Count))
-                hopStart = tick()
-                cursor   = ""
-                rate429Count  = 0
-                total429Count = 0
-            else
-                waitWithMovement(cooldown)
-                cursor = ""
-            end
-            continue
-        end
-        rate429Count = 0  -- reset consecutive on any success (total429Count keeps accumulating)
-        
-        if not response.Body then
-            log("[HOP] Response has no Body field! Likely rate-limited by Roblox.")
-            log("[HOP] Waiting 30 seconds before retrying...")
-            waitWithMovement(30)
-            cursor = ""
-            continue
-        end
-        
-        local bodySuccess, body = pcall(function() 
-            return HttpService:JSONDecode(response.Body) 
-        end)
-        
-        if not bodySuccess or not body or not body.data then
-            log("[HOP] Failed to parse response, retrying in 5s...")
-            log("[HOP DEBUG] Parse error: " .. tostring(body))
-            if response then
-                log("[HOP DEBUG] Response status: " .. tostring(response.StatusCode or "N/A"))
-                log("[HOP DEBUG] Response body type: " .. type(response.Body))
-            end
-            waitWithMovement(5)
-            continue
-        end
-        
-        -- Collect all valid servers (not current server)
-        local servers = {}
-        for _, server in pairs(body.data) do
-            if server.id ~= game.JobId 
-                and server.playing >= MIN_PLAYERS 
-                and server.playing <= MAX_PLAYERS_ALLOWED then
-                table.insert(servers, server)
-            end
-        end
-        
-        if #servers > 0 then
-            -- Sort by player count (more players = more donation potential)
-            table.sort(servers, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
-            
-            log("[HOP] Found " .. #servers .. " suitable servers on this page")
-            
-            -- Try only 1 server per page to reduce API spam and avoid rate limiting
-            local selected = servers[1]
-            local playing = selected.playing or "?"
-            local maxP = selected.maxPlayers or "?"
-            log("[HOP] Trying server: " .. selected.id .. " (" .. playing .. "/" .. maxP .. ")")
-            
-            -- Queue script for next server (use httprequest since game:HttpGet returns nil on some executors)
-            queueFunc([[
-local httprequest = (syn and syn.request) or http and http.request or http_request or (fluxus and fluxus.request) or request
-local response = httprequest({Url = "]] .. SCRIPT_URL .. [["})
-if response and response.Body then
-    loadstring(response.Body)()
-else
-    -- Fallback to game:HttpGet
-    loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))()
-end
-]])
-            
-            -- Attempt teleport
-            local teleportOptions = Instance.new("TeleportOptions")
-            teleportOptions.ShouldReserveServer = false
-            
-            local tpOk, err = pcall(function()
-                TeleportService:TeleportToPlaceInstance(PLACE_ID, selected.id, player, teleportOptions)
-            end)
-            
-            if tpOk then
-                log("[HOP] Teleport initiated! Waiting up to 3 minutes with anti-AFK movement...")
-                -- Wait up to 3 minutes for teleport to complete
-                local waitStart = tick()
-                local maxWaitTime = 180  -- 3 minutes
-                
-                while tick() - waitStart < maxWaitTime do
-                    waitWithMovement(30)
-                    local elapsed = math.floor(tick() - waitStart)
-                    log("[HOP] Still waiting for teleport... (" .. elapsed .. "s/" .. maxWaitTime .. "s)")
+    -- ── Step 1: ONE API call to find a populated server ──────────────────────
+    -- No retry loop, no pagination — if it fails for any reason, skip to Step 2
+    local foundServer = nil
+    local apiOk, apiResp = pcall(function()
+        return httprequest({
+            Url = string.format(
+                "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100&excludeFullGames=true",
+                PLACE_ID
+            )
+        })
+    end)
+
+    if apiOk and apiResp and apiResp.StatusCode == 200 and apiResp.Body then
+        local parseOk, body = pcall(function() return HttpService:JSONDecode(apiResp.Body) end)
+        if parseOk and body and body.data then
+            local candidates = {}
+            for _, s in ipairs(body.data) do
+                if type(s) == "table" and s.id and s.id ~= tostring(game.JobId)
+                   and tonumber(s.playing) and tonumber(s.playing) >= MIN_PLAYERS
+                   and tonumber(s.playing) <= MAX_PLAYERS_ALLOWED then
+                    table.insert(candidates, s)
                 end
-                
-                -- If we're still here after 3 minutes, this server isn't working
-                log("[HOP] Teleport timed out after 3 minutes")
-                log("[HOP] Cooling down for " .. TELEPORT_COOLDOWN .. "s to avoid rate limiting...")
-                waitWithMovement(TELEPORT_COOLDOWN)
-            else
-                log("[HOP] Teleport call failed: " .. tostring(err))
-                log("[HOP] Cooling down for " .. TELEPORT_COOLDOWN .. "s...")
-                waitWithMovement(TELEPORT_COOLDOWN)
             end
-            
-            -- Move to next page after trying one server
-            if body.nextPageCursor then
-                cursor = body.nextPageCursor
-                log("[HOP] Moving to next page...")
+            if #candidates > 0 then
+                -- Pick highest player count (most donation potential)
+                table.sort(candidates, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
+                foundServer = candidates[1]
+                log(string.format("[HOP] API found server with %d players", foundServer.playing or 0))
             else
-                log("[HOP] Exhausted all pages, starting over from page 1 after cooldown...")
-                waitWithMovement(TELEPORT_COOLDOWN)
-                cursor = ""
-            end
-        else
-            -- No suitable servers on this page, check if there's a next page
-            if body.nextPageCursor then
-                cursor = body.nextPageCursor
-                log("[HOP] No suitable servers on this page, checking next page...")
-            else
-                -- Exhausted all pages, start over from beginning
-                log("[HOP] Exhausted all pages with no suitable servers. Starting over from page 1 in 10s...")
-                waitWithMovement(10)
-                cursor = ""
+                log("[HOP] API returned no suitable servers")
             end
         end
+    elseif apiOk and apiResp then
+        log("[HOP] API status " .. tostring(apiResp.StatusCode) .. " — skipping to direct teleport")
+    else
+        log("[HOP] API call failed — skipping to direct teleport")
     end
+
+    -- ── Step 2: Teleport ─────────────────────────────────────────────────────
+    local teleported = false
+
+    if foundServer then
+        -- Try TeleportToPlaceInstance (specific populated server)
+        local tpOk = pcall(function()
+            TeleportService:TeleportToPlaceInstance(PLACE_ID, foundServer.id, player)
+        end)
+        if tpOk then
+            log("[HOP] TeleportToPlaceInstance initiated — waiting 45s...")
+            waitWithMovement(45)
+            -- If still here, teleport didn't fire — fall through to direct
+            log("[HOP] TeleportToPlaceInstance didn't fire, using direct teleport")
+        else
+            log("[HOP] TeleportToPlaceInstance failed, using direct teleport")
+        end
+    end
+
+    -- Direct teleport (Roblox matchmaking picks server — always works, no API needed)
+    log("[HOP] ⚡ Direct teleport to random server via matchmaking...")
+    pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+    task.wait(5)
+
+    -- Final fallback: kick self (script restarts via queueFunc on rejoin)
+    log("[HOP] Kicking self to force rejoin...")
+    pcall(function() player:Kick("Rejoining server...") end)
+    task.wait(60)  -- script should be dead by now; this only runs if kick also failed
 end
 
 -- ==================== DONATION MONITOR ====================

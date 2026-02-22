@@ -84,9 +84,9 @@ local MAX_WAIT_DISTANCE = 10              -- max distance before following playe
 local YES_LIST = {"yes", "yeah", "yep", "sure", "ok", "okay", "y", "follow", "come", "lets go", "go"}
 local NO_LIST = {"no", "nope", "nah", "don't", "dont", "n", "stop", "leave", "no thanks"}
 
-local MSG_FOLLOW_ME = "Follow me!"
-local MSG_HERE_IS_HOUSE = "Here is my booth!"
-local MSG_OK_FINE = "Ok fine :("
+local MSG_FOLLOW_ME = "follow me!"
+local MSG_HERE_IS_HOUSE = "here is my booth!"
+local MSG_OK_FINE_POOL = {"ok fine :(", "aw ok :(", "dang ok lol", "oh ok :(", "ok :("}
 
 local SECOND_ATTEMPT_CHANCE = 0.30
 local FRUSTRATION_THRESHOLD = 5
@@ -104,80 +104,93 @@ local NO_RESPONSE_MSGS = {
 
 -- Guilt-trip second message (sent after refusal, no wait for response)
 local MSGS_SECOND = {
-    "aw man 😔 okay... no worries i guess",
-    "oh ok 😢 i'll keep trying...",
-    "damn okay 😔 maybe next time",
-    "np i understand 😢 just trying my best out here",
-    "ok fine 😔 sorry for bothering",
+    "aw ok no worries i guess",
+    "oh ok ill keep trying",
+    "damn okay maybe next time",
+    "np i understand just tryna get some",
+    "ok fine sorry for asking lol",
+    "alright :( maybe someone else",
 }
 
 -- Contextual message pools by target's Raised amount
 local MSGS_EMPTY = {
-    "hey! saving up for my dream item, could you spare a little? 🙏",
-    "hi! trying to reach my goal, any donation helps! 😊",
-    "hey, would mean a lot if you helped me get closer to my goal 💙",
-    "saving up for something special, even 1 robux counts! 🌟",
+    "hey can u donate? tryna save up",
+    "hi donate pls i have nothing yet",
+    "anyone donate? literally anything helps",
+    "plss donate im so close to my goal",
+    "hey could u donate? saving up for something",
+    "umm hi could u spare some robux",
+    "donate pls im just starting out",
+    "hey! help me out? even a little is fine",
 }
 local MSGS_LOW = {
-    "hey! we're both grinding, support each other? 🤝",
-    "hi! small donation? every bit helps fr 🙏",
-    "hey could you help me out a little? 😊",
-    "we both know the grind, spare some robux? 💙",
+    "hey we both grinding, support each other?",
+    "donate? even like 5 would help fr",
+    "hi small donation? any amount is fine",
+    "hey could u help me out a bit",
+    "we both starting out, donate pls?",
+    "bro donate pls i need robux",
+    "hey spare some? tryna catch up",
 }
 local MSGS_MID = {
-    "yo! you're doing well, spare some robux for me? 😄",
-    "hey generous one! mind helping me out? 🙏",
-    "hi! you look like someone who spreads the love 💙 donate?",
-    "you've got donations, share the vibe? 😊",
+    "yo ur doing well, spare some for me?",
+    "hey nice booth! could u donate?",
+    "hi donate pls u seem generous lol",
+    "hey looks like ur doing good, help me out?",
+    "u got donations u know how it feels, donate?",
+    "damn nice raised, share some? lol",
 }
 local MSGS_RICH = {
-    "yo bro you look generous, spare some robux? 🙏",
-    "big donator energy right here 👀 help me out?",
-    "you clearly know how to make people's day 😄 my turn?",
-    "ok you're literally the most generous looking person here, donate? 🔥",
+    "yo ur rich donate pls",
+    "hey ur clearly generous, help me out?",
+    "bro u got so much help me lol",
+    "ok ur booth doing great mine isnt, donate?",
+    "hey big numbers on ur booth share some?",
+    "ur doing amazing, spare a lil for me?",
 }
 local MSGS_LEAVING = {
-    "i'm leaving this server soon, last chance 😅",
-    "hopping servers in a bit, donate before i go? 🙏",
-    "about to leave, anyone wanna donate real quick? 😊",
-    "last round before i hop, someone be a legend 🔥",
+    "leaving this server soon if anyone wants to donate",
+    "bout to hop, anyone wanna donate quick",
+    "last chance before i leave lol",
+    "changing server soon quick donate?",
 }
 local COMPLIMENTS = {
-    "nice outfit! 🔥",
-    "your booth looks really cool! 💙",
-    "bro your style is 10/10 😄",
-    "love the fit ngl 👀",
-    "your booth setup is clean fr",
-    "you seem like a cool person ngl 😊",
-    "ok your avatar is actually fire 🔥",
+    "nice outfit",
+    "ur booth looks nice",
+    "cool avatar ngl",
+    "ur style is fire",
+    "love the fit",
+    "cute avatar lol",
+    "ur booth setup is clean",
+    "nice look fr",
 }
 local MSGS_GOODBYE = {
-    "no worries, gl with your booth! 🤝",
-    "all good, have fun! 😊",
-    "np! good luck today 💙",
-    "okay no worries! enjoy the game 🤝",
-    "all g, have a good one! ✌️",
+    "no worries gl with ur booth",
+    "all good have fun",
+    "np good luck today",
+    "ok no worries enjoy the game",
+    "all g have a good one",
+    "its fine gl",
 }
 local MSGS_THANKS = {
-    "hey! just wanted to say thank you so much for the donation!! 💙🙏",
-    "bro i had to come back and say THANK YOU 🎉 means a lot!!",
-    "omg thank you again!! you made my day fr 💙",
-    "seriously thank you, you're the best!! 🔥",
+    "hey just wanted to say thank u for the donation!! that was really nice",
+    "bro i had to come back and say THANK YOU means a lot",
+    "omg thank you so much!! u made my day fr",
+    "seriously thank you ur the best",
+    "hey ty so much for the donation!! really appreciate it",
 }
 
--- Dream item goal (chosen once at script start)
+-- Dream item goal (chosen once at script start, used in getFirstMsg)
 local DREAM_ITEMS = {
     {name = "Headless Horseman", price = 31000},
     {name = "Korblox",           price = 17000},
     {name = "a domino crown",    price = 10300},
     {name = "my dream gamepass", price = 1000},
     {name = "a limited item",    price = 5000},
-    {name = "my favorite UGC hat", price = 800},
+    {name = "my fav ugc hat",    price = 800},
 }
 local dreamItem = DREAM_ITEMS[math.random(#DREAM_ITEMS)]
-local function getNeeded()
-    return math.max(dreamItem.price - Stats.robux_gross, 50)
-end
+-- NOTE: getNeeded() is defined later (after Stats) to avoid upvalue bug
 
 local FRUSTRATION_MSGS = {
     "today is not my day...",
@@ -228,6 +241,11 @@ local Stats = {
     raised_current  = 0,   -- current absolute Raised value shown on our booth
 }
 local sessionStart = tick()
+
+-- getNeeded() must be AFTER Stats (upvalue lookup at definition time in Lua)
+local function getNeeded()
+    return math.max(dreamItem.price - Stats.robux_gross, 50)
+end
 
 -- ==================== INTERACTION LOG ====================
 -- Buffer of per-player conversations; flushed to dashboard every report cycle.
@@ -1138,10 +1156,11 @@ local function getMsgCategory(raised)
     return "rich"
 end
 
--- 40% chance to prepend player's name to a message
+-- 35% chance to include player's name in message (varied prefixes)
 local function addName(msg, t)
-    if math.random(10) <= 4 then
-        return "hey " .. t.Name .. "! " .. msg
+    if math.random(20) <= 7 then
+        local prefixes = {"hey " .. t.Name .. " ", t.Name .. " ", "yo " .. t.Name .. " "}
+        return prefixes[math.random(#prefixes)] .. msg
     end
     return msg
 end
@@ -1162,13 +1181,13 @@ local function getFirstMsg(t)
 
     local base
     if leavingSoon and math.random(2) == 1 then
-        -- 50% chance to use "leaving soon" urgency message
         base = MSGS_LEAVING[math.random(#MSGS_LEAVING)]
     elseif useDreamLine then
         local need = getNeeded()
         local dreamLines = {
-            "saving up for " .. dreamItem.name .. ", need just " .. need .. " more robux 🙏",
-            "trying to get " .. dreamItem.name .. "! only " .. need .. " robux away 😊",
+            "saving up for " .. dreamItem.name .. " need " .. need .. " more robux",
+            "trying to get " .. dreamItem.name .. " only " .. need .. " away",
+            "so close to getting " .. dreamItem.name .. " just " .. need .. " more",
         }
         base = dreamLines[math.random(#dreamLines)]
     else
@@ -1281,7 +1300,7 @@ local function nextPlayer()
 
         elseif result == "no" then
             -- ── Refused ──
-            sendChat(MSG_OK_FINE)
+            sendChat(MSG_OK_FINE_POOL[math.random(#MSG_OK_FINE_POOL)])
             task.wait(math.random() * 0.7 + 0.8)
 
             -- 30% chance: guilt-trip second message (no wait — just write and walk away)

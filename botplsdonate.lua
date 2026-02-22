@@ -1059,7 +1059,19 @@ local function sendChatTyped(msg)
     sendChat(msg)
 end
 
--- (idle action removed — no jumps/spins while begging)
+-- Occasional natural movement between targets (no dance)
+local function doIdleAction()
+    local roll = math.random()
+    if roll < 0.12 then
+        -- short jump
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+        task.wait(0.3)
+        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+    elseif roll < 0.18 then
+        -- brief pause
+        task.wait(math.random() * 0.8 + 0.3)
+    end
+end
 
 local function findClosest()
     if not player.Character then return nil end
@@ -1196,6 +1208,8 @@ local function nextPlayer()
 
     log("[MAIN] Target → " .. target.Name)
     lastActivityTime = tick()  -- bot is actively working
+
+    doIdleAction()
 
     if chasePlayer(target) then
         -- Compliment first (reciprocity principle), then donation request

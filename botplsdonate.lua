@@ -222,16 +222,43 @@ local httprequest = (syn and syn.request) or http and http.request or http_reque
 local queueFunc = queueonteleport or queue_on_teleport or (syn and syn.queue_on_teleport) or function() log("[HOP] Queue not supported!") end
 
 -- ==================== SINGLETON GUARD ====================
--- Only ONE instance runs at a time.
--- New inject sets PD_RUNNING_ID → old instance's isActiveInstance() returns false → loops exit.
+-- Root cause of duplicates: queueFunc() was called multiple times per hop
+-- (from main loop + watchdog firing simultaneously), so N hops = N scripts on next server.
+-- Fix:
+--   1. queueFunc is only allowed ONCE per Roblox session (PD_HAS_QUEUED flag)
+--   2. Singleton with stagger so simultaneous starts resolve to exactly 1 winner
 local myInstanceId = tick()
 
+-- Wrap queueFunc so it can only fire ONCE per Roblox session
+local _rawQueueFunc = queueFunc
+queueFunc = function(code)
+    if getgenv and getgenv().PD_HAS_QUEUED then
+        log("[SINGLETON] queueFunc already called this session — skipping duplicate")
+        return
+    end
+    if getgenv then getgenv().PD_HAS_QUEUED = true end
+    _rawQueueFunc(code)
+end
+
 if getgenv then
+    -- Reset queue flag for this new server session
+    getgenv().PD_HAS_QUEUED = false
+
     local prevId = getgenv().PD_RUNNING_ID
     if prevId and prevId ~= 0 then
-        log("[SINGLETON] Replacing old instance — only this one will run now")
+        log("[SINGLETON] Replacing previous instance " .. tostring(prevId))
     end
     getgenv().PD_RUNNING_ID = myInstanceId
+
+    -- Stagger: give other simultaneous instances a moment to also set their ID,
+    -- then re-check — the last one to set wins and all others exit their loops
+    task.wait(0.05 + math.random() * 0.15)
+    if getgenv().PD_RUNNING_ID ~= myInstanceId then
+        -- Lost the race — another instance started after us, let it run
+        log("[SINGLETON] Lost startup race — exiting (another instance is running)")
+        return  -- stops this script execution entirely
+    end
+    log("[SINGLETON] Won startup race — this is the active instance (id=" .. myInstanceId .. ")")
 end
 
 local function isActiveInstance()

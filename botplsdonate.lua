@@ -5,7 +5,7 @@ local MAX_PLAYERS_ALLOWED = 24                         -- Maximum players in ser
 local SERVER_COOLDOWN_MINS = 60                        -- Minutes to avoid rejoining a visited server (overridable)
 local TELEPORT_RETRY_DELAY = 8                         -- Delay between teleport attempts
 local TELEPORT_COOLDOWN = 30                           -- Cooldown between failed servers
-local SCRIPT_URL = "https://cdn.jsdelivr.net/gh/ivankodaria5-ai/plsdonatebot@main/botplsdonate.lua"
+local SCRIPT_URL = "https://raw.githubusercontent.com/ivankodaria5-ai/plsdonatebot/main/botplsdonate.lua"
 local DASH_URL   = "https://branches-cumulative-desktops-bearing.trycloudflare.com"
 
 local BOOTH_CHECK_POSITION = Vector3.new(165, 0, 311)  -- Center point to search for booths

@@ -544,6 +544,30 @@ local function claimBooth(retryCount)
     return claimBooth(retryCount)
 end
 
+-- ── Startup server viability check ───────────────────────────────────────────
+-- Skip booth claim entirely if the server has too few players.
+-- This prevents wasting 90s on an empty server arrived via matchmaking.
+do
+    task.wait(3)  -- give PlayerList a moment to populate after join
+    local startupCount = #Players:GetPlayers()
+    local currentJobId = tostring(game.JobId)
+    if startupCount < MIN_PLAYERS then
+        log(string.format("[STARTUP] Only %d players (min=%d) — server too empty, hopping now!", startupCount, MIN_PLAYERS))
+        local RELOAD = [[
+local httprequest = (syn and syn.request) or http and http.request or http_request or (fluxus and fluxus.request) or request
+local response = httprequest({Url = "]] .. SCRIPT_URL .. [["})
+if response and response.Body then loadstring(response.Body)()
+else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
+]]
+        queueFunc(RELOAD)
+        pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+        task.wait(5)
+        pcall(function() player:Kick("Joining better server...") end)
+        task.wait(60)
+    end
+    log(string.format("[STARTUP] Server OK: %d players — proceeding", startupCount))
+end
+
 -- CLAIM BOOTH AND SET HOME POSITION
 local HOME_POSITION = claimBooth()
 if not HOME_POSITION then

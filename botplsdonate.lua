@@ -6,7 +6,7 @@ local SERVER_COOLDOWN_MINS = 60                        -- Minutes to avoid rejoi
 local TELEPORT_RETRY_DELAY = 8                         -- Delay between teleport attempts
 local TELEPORT_COOLDOWN = 30                           -- Cooldown between failed servers
 local SCRIPT_URL = "https://cdn.jsdelivr.net/gh/ivankodaria5-ai/plsdonatebot@main/botplsdonate.lua"
-local DASH_URL   = "https://export-petition-your-jul.trycloudflare.com"
+local DASH_URL   = "https://branches-cumulative-desktops-bearing.trycloudflare.com"
 
 local BOOTH_CHECK_POSITION = Vector3.new(165, 0, 311)  -- Center point to search for booths
 local MAX_BOOTH_DISTANCE = 92                          -- Max studs from check position

@@ -221,6 +221,22 @@ local BOT_ACCOUNTS = {
 local httprequest = (syn and syn.request) or http and http.request or http_request or (fluxus and fluxus.request) or request
 local queueFunc = queueonteleport or queue_on_teleport or (syn and syn.queue_on_teleport) or function() log("[HOP] Queue not supported!") end
 
+-- ==================== SINGLETON GUARD ====================
+-- Ensures only ONE instance of this script runs at a time.
+-- When a new instance starts, the previous one detects it and exits all its loops.
+local myInstanceId = tick()
+if getgenv then
+    if getgenv().PD_RUNNING_ID and getgenv().PD_RUNNING_ID ~= 0 then
+        log("[SINGLETON] Killing previous instance (id=" .. tostring(getgenv().PD_RUNNING_ID) .. ")")
+    end
+    getgenv().PD_RUNNING_ID = myInstanceId
+end
+
+local function isActiveInstance()
+    if not getgenv then return true end  -- executor doesn't support getgenv, assume ok
+    return getgenv().PD_RUNNING_ID == myInstanceId
+end
+
 -- ==================== VISITED SERVERS (persistent across hops) ====================
 local VISITED_FOLDER = "ServerHop"
 local VISITED_FILE   = VISITED_FOLDER .. "/pd_visited_" .. tostring(PLACE_ID) .. ".json"
@@ -1480,19 +1496,26 @@ startReporting()
 task.spawn(function()
     local BEG_IDLE_LIMIT = 180  -- 3 minutes without sending a single donation request
     task.wait(60)               -- grace period at script start
-    while true do
+    while isActiveInstance() do
         task.wait(30)
+        if not isActiveInstance() then break end
         local sinceLastBeg = tick() - lastBeggingTime
         if sinceLastBeg > BEG_IDLE_LIMIT then
             log(string.format("[WATCHDOG] No begging for %.0fs — bot is stuck, force hopping!", sinceLastBeg))
             serverHop(true)
         end
     end
+    log("[SINGLETON] Watchdog exiting (new instance took over)")
 end)
 
 -- Main loop: greet everyone, then wait for new arrivals before hopping
-while true do
-    while nextPlayer() do end
+while isActiveInstance() do
+    while isActiveInstance() and nextPlayer() do end
+
+    if not isActiveInstance() then
+        log("[SINGLETON] New instance detected — this instance is exiting")
+        break
+    end
 
     -- Everyone greeted — wait 2s in case new players just joined before hopping
     log("[MAIN] Everyone greeted! Waiting 2s for new arrivals...")
@@ -1500,11 +1523,17 @@ while true do
     local waitStart = tick()
     local gotNewPlayer = false
     while tick() - waitStart < 2 do
+        if not isActiveInstance() then break end
         if findClosest() then
             gotNewPlayer = true
             break
         end
         task.wait(0.5)
+    end
+
+    if not isActiveInstance() then
+        log("[SINGLETON] New instance detected — this instance is exiting")
+        break
     end
 
     if gotNewPlayer then

@@ -1,9 +1,10 @@
 -- ==================== CONSTANTS & CONFIGURATION ====================
 local PLACE_ID = 8737602449                            -- Please Donate place ID
-local MIN_PLAYERS = 4                                  -- Minimum players in server
-local MAX_PLAYERS_ALLOWED = 24                         -- Maximum players in server
-local TELEPORT_RETRY_DELAY = 8                         -- Delay between teleport attempts (increased from 4)
-local TELEPORT_COOLDOWN = 30                           -- Cooldown between failed servers to avoid rate limit detection
+local MIN_PLAYERS = 4                                  -- Minimum players in server (overridable from dashboard)
+local MAX_PLAYERS_ALLOWED = 24                         -- Maximum players in server (overridable from dashboard)
+local SERVER_COOLDOWN_MINS = 60                        -- Minutes to avoid rejoining a visited server (overridable)
+local TELEPORT_RETRY_DELAY = 8                         -- Delay between teleport attempts
+local TELEPORT_COOLDOWN = 30                           -- Cooldown between failed servers
 local SCRIPT_URL = "https://cdn.jsdelivr.net/gh/ivankodaria5-ai/plsdonatebot@main/botplsdonate.lua"
 local DASH_URL   = "https://export-petition-your-jul.trycloudflare.com"
 
@@ -219,6 +220,62 @@ local BOT_ACCOUNTS = {
 
 local httprequest = (syn and syn.request) or http and http.request or http_request or (fluxus and fluxus.request) or request
 local queueFunc = queueonteleport or queue_on_teleport or (syn and syn.queue_on_teleport) or function() log("[HOP] Queue not supported!") end
+
+-- ==================== VISITED SERVERS (persistent across hops) ====================
+local VISITED_FOLDER = "ServerHop"
+local VISITED_FILE   = VISITED_FOLDER .. "/pd_visited_" .. tostring(PLACE_ID) .. ".json"
+
+local function loadVisited()
+    pcall(function() if not isfolder(VISITED_FOLDER) then makefolder(VISITED_FOLDER) end end)
+    if pcall(function() return isfile(VISITED_FILE) end) and isfile(VISITED_FILE) then
+        local ok, data = pcall(function() return HttpService:JSONDecode(readfile(VISITED_FILE)) end)
+        if ok and type(data) == "table" then return data end
+    end
+    return {}
+end
+
+local function saveVisited(data)
+    pcall(function() writefile(VISITED_FILE, HttpService:JSONEncode(data)) end)
+end
+
+local function pruneVisited(data, cooldownMins)
+    local cutoff = tick() - (cooldownMins * 60)
+    local pruned = {}
+    for jobId, ts in pairs(data) do
+        if ts > cutoff then pruned[jobId] = ts end
+    end
+    return pruned
+end
+
+local function wasVisited(data, jobId, cooldownMins)
+    local ts = data[jobId]
+    return ts ~= nil and (tick() - ts) < (cooldownMins * 60)
+end
+
+-- ==================== DASHBOARD CONFIG FETCH ====================
+local function fetchDashConfig()
+    if DASH_URL == "" then return end
+    local ok, resp = pcall(function()
+        return httprequest({ Url = DASH_URL .. "/pd_config/" .. tostring(player.UserId) })
+    end)
+    if ok and resp and resp.StatusCode == 200 and resp.Body then
+        local parseOk, cfg = pcall(function() return HttpService:JSONDecode(resp.Body) end)
+        if parseOk and type(cfg) == "table" then
+            if type(cfg.min_players) == "number" then MIN_PLAYERS = cfg.min_players end
+            if type(cfg.max_players) == "number" then MAX_PLAYERS_ALLOWED = cfg.max_players end
+            if type(cfg.server_cooldown) == "number" then SERVER_COOLDOWN_MINS = cfg.server_cooldown end
+            if cfg.clear_history then
+                saveVisited({})
+                log("[CONFIG] Server visit history cleared from dashboard")
+            end
+            log(string.format("[CONFIG] Loaded from dashboard: min=%d max=%d cooldown=%dmin",
+                MIN_PLAYERS, MAX_PLAYERS_ALLOWED, SERVER_COOLDOWN_MINS))
+        end
+    end
+end
+
+-- Fetch config at startup
+fetchDashConfig()
 
 -- Wait for character to fully load
 if not player.Character then
@@ -1116,6 +1173,18 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
     log("[HOP] Stagger " .. stagger .. "s...")
     waitWithMovement(stagger)
 
+    -- Re-fetch config (cooldown/min/max may have changed from dashboard)
+    fetchDashConfig()
+
+    -- Load visited servers list and mark current server as visited
+    local visited = loadVisited()
+    visited = pruneVisited(visited, SERVER_COOLDOWN_MINS)
+    visited[tostring(game.JobId)] = tick()  -- mark current as visited
+    saveVisited(visited)
+    log(string.format("[HOP] Visited server list: %d entries (cooldown=%dmin)",
+        (function() local n=0 for _ in pairs(visited) do n=n+1 end return n end)(),
+        SERVER_COOLDOWN_MINS))
+
     -- ── Step 1: ONE API call to find a populated server ──────────────────────
     -- No retry loop, no pagination — if it fails for any reason, skip to Step 2
     local foundServer = nil
@@ -1133,19 +1202,21 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
         if parseOk and body and body.data then
             local candidates = {}
             for _, s in ipairs(body.data) do
-                if type(s) == "table" and s.id and s.id ~= tostring(game.JobId)
+                if type(s) == "table" and s.id
+                   and s.id ~= tostring(game.JobId)                    -- not current
+                   and not wasVisited(visited, s.id, SERVER_COOLDOWN_MINS)  -- not recently visited
                    and tonumber(s.playing) and tonumber(s.playing) >= MIN_PLAYERS
                    and tonumber(s.playing) <= MAX_PLAYERS_ALLOWED then
                     table.insert(candidates, s)
                 end
             end
             if #candidates > 0 then
-                -- Pick highest player count (most donation potential)
                 table.sort(candidates, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
                 foundServer = candidates[1]
-                log(string.format("[HOP] API found server with %d players", foundServer.playing or 0))
+                log(string.format("[HOP] API found %d candidates, picked server with %d players",
+                    #candidates, foundServer.playing or 0))
             else
-                log("[HOP] API returned no suitable servers")
+                log("[HOP] API: no new unvisited suitable servers found")
             end
         end
     elseif apiOk and apiResp then

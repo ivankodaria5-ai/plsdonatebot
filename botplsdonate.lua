@@ -1394,14 +1394,12 @@ end
 local function startReporting()
     if DASH_URL == "" then return end
     task.spawn(function()
+        local consecutiveFails = 0
         while true do
-            pcall(function()
-                -- Stats.raised_current is kept live by monitorDonations()
-                -- (set at startup from leaderstats.Raised, then updated on every change)
-                -- Flush interaction log: snapshot current buffer then clear it
-                local logSnapshot = interactionLog
-                interactionLog = {}
+            local logSnapshot = interactionLog
+            interactionLog = {}
 
+            local ok, err = pcall(function()
                 local body = HttpService:JSONEncode({
                     id              = tostring(player.UserId),
                     name            = player.Name,
@@ -1418,14 +1416,37 @@ local function startReporting()
                     session_start   = sessionStart,
                     interactions    = logSnapshot,
                 })
-                request({
+                local resp = request({
                     Url     = DASH_URL .. "/pd_update",
                     Method  = "POST",
                     Headers = {["Content-Type"] = "application/json"},
                     Body    = body,
                 })
+                -- Treat non-2xx as failure so we know the server rejected it
+                if resp and resp.StatusCode and resp.StatusCode >= 300 then
+                    error("HTTP " .. tostring(resp.StatusCode))
+                end
             end)
-            task.wait(5)  -- report every 5s (was 10s) — keeps dashboard alive during long hops
+
+            if ok then
+                if consecutiveFails > 0 then
+                    log("[REPORT] ✅ Dashboard reconnected after " .. consecutiveFails .. " failed reports")
+                end
+                consecutiveFails = 0
+            else
+                consecutiveFails += 1
+                -- Log every 6th fail (~30 seconds) so console isn't spammed
+                if consecutiveFails == 1 or consecutiveFails % 6 == 0 then
+                    log("[REPORT] ⚠️ Dashboard unreachable (x" .. consecutiveFails .. "): " .. tostring(err))
+                    log("[REPORT] URL: " .. DASH_URL)
+                end
+                -- Return undelivered interactions to buffer so they're not lost
+                for _, entry in ipairs(logSnapshot) do
+                    table.insert(interactionLog, entry)
+                end
+            end
+
+            task.wait(5)
         end
     end)
 end

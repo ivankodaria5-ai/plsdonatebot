@@ -81,8 +81,20 @@ local MESSAGE_TYPOS = {
 
 local WAIT_FOR_ANSWER_TIME = 7        -- seconds to wait for reply
 local MAX_WAIT_DISTANCE = 10              -- max distance before following player while waiting
-local YES_LIST = {"yes", "yeah", "yep", "sure", "ok", "okay", "y", "follow", "come", "lets go", "go"}
-local NO_LIST = {"no", "nope", "nah", "don't", "dont", "n", "stop", "leave", "no thanks"}
+-- YES: full words or substrings for longer phrases
+local YES_LIST = {
+    "yes", "yeah", "yep", "yea", "ya", "yh", "sure", "ok", "okay", "k",
+    "bet", "aight", "alright", "fine", "of course", "why not", "ight", "ig",
+    "follow", "come", "lead", "lets go", "go", "show me", "where", "lets",
+    "ill donate", "im donating", "sure thing", "no problem",
+}
+-- NO: full words or substrings
+local NO_LIST = {
+    "no", "nope", "nah", "naur", "n", "pass", "busy", "not now", "not rn",
+    "no ty", "no thx", "no thanks", "no thank", "nty", "nah ty",
+    "leave", "stop", "go away", "gtfo", "dont", "don't", "never",
+    "no way", "im good", "i'm good", "leave me",
+}
 
 local MSG_FOLLOW_ME = "follow me!"
 local MSG_HERE_IS_HOUSE = "here is my booth!"
@@ -1047,31 +1059,7 @@ local function sendChatTyped(msg)
     sendChat(msg)
 end
 
--- Random idle action between players (looks human)
-local function doIdleAction()
-    local roll = math.random()
-    if roll < 0.05 then
-        -- 5% chance: random jump
-        log("[IDLE] Random jump")
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-        task.wait(0.35)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-    elseif roll < 0.08 then
-        -- 3% chance: spin around
-        log("[IDLE] Random spin")
-        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            for _ = 1, 8 do
-                hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.pi / 4, 0)
-                task.wait(0.05)
-            end
-        end
-    elseif roll < 0.10 then
-        -- 2% chance: pause briefly
-        log("[IDLE] Random pause")
-        task.wait(math.random() * 1.0 + 0.5)
-    end
-end
+-- (idle action removed — no jumps/spins while begging)
 
 local function findClosest()
     if not player.Character then return nil end
@@ -1209,9 +1197,6 @@ local function nextPlayer()
     log("[MAIN] Target → " .. target.Name)
     lastActivityTime = tick()  -- bot is actively working
 
-    -- Random idle action before approaching (looks more human)
-    doIdleAction()
-
     if chasePlayer(target) then
         -- Compliment first (reciprocity principle), then donation request
         local compliment = COMPLIMENTS[math.random(#COMPLIMENTS)]
@@ -1222,14 +1207,14 @@ local function nextPlayer()
         sendChatTyped(openingMsg)
         Stats.approached += 1
         lastBeggingTime = tick()
-        leavingSoon = false  -- reset once we've actually sent a message
-        startCircleDance(CIRCLE_COOLDOWN)
-        -- Circle-dance phase: keep following while spinning
+        leavingSoon = false
+        -- Brief pause after sending message: just stand close and face the player
         do
             local elapsed = 0
-            while elapsed < CIRCLE_COOLDOWN do
+            while elapsed < 2 do
                 task.wait(0.2)
                 elapsed += 0.2
+                faceTargetBriefly(target)
                 local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
                 local tr = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
                 local h = player.Character and player.Character:FindFirstChild("Humanoid")
@@ -1240,23 +1225,6 @@ local function nextPlayer()
                         (tr.Position + tr.CFrame.LookVector * 2).Z)
                     if (r.Position - fp).Magnitude > 3 then h:MoveTo(fp) end
                 end
-            end
-        end
-        -- Normal cooldown: face + follow
-        local normElapsed = 0
-        while normElapsed < NORMAL_COOLDOWN do
-            task.wait(0.1)
-            normElapsed += 0.1
-            faceTargetBriefly(target)
-            local r = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-            local tr = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
-            local h = player.Character and player.Character:FindFirstChild("Humanoid")
-            if r and tr and h then
-                local fp = Vector3.new(
-                    (tr.Position + tr.CFrame.LookVector * 2).X,
-                    tr.Position.Y,
-                    (tr.Position + tr.CFrame.LookVector * 2).Z)
-                if (r.Position - fp).Magnitude > 3 then h:MoveTo(fp) end
             end
         end
 
@@ -1294,13 +1262,20 @@ local function nextPlayer()
                     local msg = lastMessage
                     lastActivityTime = tick()
                     log("[RESPONSE] " .. target.Name .. " said: " .. msg)
+                    -- Smart match: single-char words must be entire message; longer = substring
+                    local function matches(text, word)
+                        if #word <= 1 then
+                            return text:match("^%s*" .. word .. "%s*$") ~= nil
+                        end
+                        return text:find(word, 1, true) ~= nil
+                    end
                     local saidYes = false
                     for _, word in ipairs(YES_LIST) do
-                        if msg:find(word) then saidYes = true; break end
+                        if matches(msg, word) then saidYes = true; break end
                     end
                     local saidNo = false
                     for _, word in ipairs(NO_LIST) do
-                        if msg:find(word) then saidNo = true; break end
+                        if matches(msg, word) then saidNo = true; break end
                     end
                     if saidYes then return "yes", msg end
                     if saidNo  then return "no",  msg end

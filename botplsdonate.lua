@@ -222,18 +222,37 @@ local httprequest = (syn and syn.request) or http and http.request or http_reque
 local queueFunc = queueonteleport or queue_on_teleport or (syn and syn.queue_on_teleport) or function() log("[HOP] Queue not supported!") end
 
 -- ==================== SINGLETON GUARD ====================
--- Ensures only ONE instance of this script runs at a time.
--- When a new instance starts, the previous one detects it and exits all its loops.
+-- Kills ALL previous instances (even old code without guard) by hooking task.wait.
+-- Any coroutine from a previous instance will error on next yield → dies immediately.
 local myInstanceId = tick()
+
 if getgenv then
-    if getgenv().PD_RUNNING_ID and getgenv().PD_RUNNING_ID ~= 0 then
-        log("[SINGLETON] Killing previous instance (id=" .. tostring(getgenv().PD_RUNNING_ID) .. ")")
+    local prevId = getgenv().PD_RUNNING_ID
+    if prevId and prevId ~= 0 then
+        log("[SINGLETON] Killing previous instance(s) — setting PD_RUNNING_ID=" .. myInstanceId)
     end
     getgenv().PD_RUNNING_ID = myInstanceId
+
+    -- Hook task.wait globally: old coroutines error out on next yield
+    local _realWait = task.wait
+    task.wait = function(t)
+        if getgenv().PD_RUNNING_ID ~= myInstanceId then
+            error("__PD_SINGLETON_KILL__", 0)
+        end
+        return _realWait(t)
+    end
+    -- Also hook wait() (legacy)
+    local _realWaitLeg = wait
+    wait = function(t)
+        if getgenv().PD_RUNNING_ID ~= myInstanceId then
+            error("__PD_SINGLETON_KILL__", 0)
+        end
+        return _realWaitLeg(t)
+    end
 end
 
 local function isActiveInstance()
-    if not getgenv then return true end  -- executor doesn't support getgenv, assume ok
+    if not getgenv then return true end
     return getgenv().PD_RUNNING_ID == myInstanceId
 end
 

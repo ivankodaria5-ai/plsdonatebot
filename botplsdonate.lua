@@ -400,7 +400,16 @@ local function findOwnedBooth(boothLocation)
     return nil
 end
 
-local function claimBooth()
+local BOOTH_CLAIM_DEADLINE = nil  -- set on first call
+
+local function claimBooth(retryCount)
+    retryCount = retryCount or 0
+    -- Global deadline: max 90s total for booth claiming across all retries
+    if retryCount == 0 then BOOTH_CLAIM_DEADLINE = tick() + 90 end
+    if BOOTH_CLAIM_DEADLINE and tick() > BOOTH_CLAIM_DEADLINE then
+        log("[BOOTH] ⏰ 90s deadline exceeded — skipping booth, using fallback")
+        return nil
+    end
     log("=== BOOTH CLAIMER ===")
 
     -- Fast path: booth already claimed in this Lua session
@@ -446,6 +455,11 @@ local function claimBooth()
     
     -- Try each booth one by one
     for i, booth in ipairs(unclaimed) do
+        -- Check deadline on every booth attempt
+        if BOOTH_CLAIM_DEADLINE and tick() > BOOTH_CLAIM_DEADLINE then
+            log("[BOOTH] ⏰ Deadline hit mid-loop — aborting, using fallback")
+            return nil
+        end
         log("═══════════════════════════════════════")
         log("[BOOTH] Attempt " .. i .. "/" .. #unclaimed .. " - Trying Booth #" .. booth.number)
         
@@ -521,8 +535,13 @@ local function claimBooth()
     
     log("[BOOTH] All booths tried, moving away before retrying...")
     walkRandomDirection(30, 3)
-    log("[BOOTH] Retrying from start...")
-    return claimBooth()  -- Recursively retry until success
+    retryCount = (retryCount or 0) + 1
+    if retryCount >= 3 then
+        log("[BOOTH] ⚠️ Failed after 3 full cycles — using fallback position and continuing")
+        return nil
+    end
+    log("[BOOTH] Retrying from start (cycle " .. retryCount .. "/3)...")
+    return claimBooth(retryCount)
 end
 
 -- CLAIM BOOTH AND SET HOME POSITION

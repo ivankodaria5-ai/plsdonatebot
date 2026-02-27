@@ -252,7 +252,7 @@ local Stats = {
     robux_gross     = 0,   -- total R$ raised (before Roblox 40% cut)
     raised_current  = 0,   -- current absolute Raised value shown on our booth
 }
-local sessionStart = tick()
+local sessionStart = os.time()  -- Unix epoch so dashboard timestamps are correct
 
 -- getNeeded() must be AFTER Stats (upvalue lookup at definition time in Lua)
 local function getNeeded()
@@ -470,6 +470,72 @@ end
 ]]
 pcall(function() queueFunc(_reconnectScript) end)
 log("[RECONNECT] Script queued — clicking Reconnect on 277 screen will auto-restart bot")
+
+-- ==================== AUTO-RECONNECT: Error 267 (Kick) recovery ====================
+-- Error 267 = "You have been kicked by this experience or its moderators"
+-- Unlike Error 277 (has "Reconnect" button), Error 267 only has a "Leave" button.
+-- Strategy: detect the kick dialog via CoreGui the moment it appears,
+-- immediately call TeleportService:Teleport() to "escape" before the kick
+-- fully closes the connection — this fires queueonteleport so the script
+-- auto-restarts on the new server without any manual action.
+local function startKickRecovery()
+    task.spawn(function()
+        local recovering = false
+        while true do
+            task.wait(1.5)
+            if recovering then continue end
+            pcall(function()
+                local cg = game:GetService("CoreGui")
+                -- Scan all GUI text for Error 267 / kicked indicators
+                local kicked267 = false
+                for _, elem in pairs(cg:GetDescendants()) do
+                    if elem:IsA("TextLabel") or elem:IsA("TextBox") then
+                        local t = string.lower(tostring(elem.Text or ""))
+                        if string.find(t, "267")
+                        or string.find(t, "kicked by this experience")
+                        or string.find(t, "kicked by its moderators") then
+                            kicked267 = true
+                            break
+                        end
+                    end
+                end
+                if not kicked267 then return end
+
+                recovering = true
+                log("[267] Kick detected — attempting teleport escape before disconnect...")
+
+                -- Re-queue script in case prior queue was consumed (singleton guard
+                -- resets PD_HAS_QUEUED each new server, but we force it here just in case)
+                if getgenv then getgenv().PD_HAS_QUEUED = false end
+                pcall(function() queueFunc(_reconnectScript) end)
+
+                -- Immediately teleport — if this fires before Roblox closes the
+                -- connection it behaves like a normal server hop and the queued
+                -- script will auto-execute on the next server.
+                pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+                task.wait(3)
+
+                -- Fallback: if teleport didn't fire in 3s, click the Leave button.
+                -- The queued script won't fire via queueonteleport in this case,
+                -- but the user will return to Roblox home and can manually rejoin.
+                for _, btn in pairs(cg:GetDescendants()) do
+                    if btn:IsA("TextButton") then
+                        local bt = string.lower(tostring(btn.Text or ""))
+                        if bt == "leave" or bt == "ok" or bt == "okay" then
+                            btn.MouseButton1Click:Fire()
+                            pcall(function() btn:Activate() end)
+                            log("[267] Fallback: clicked Leave button")
+                            break
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+end
+
+startKickRecovery()
+log("[267] Kick recovery monitor started (Error 267 auto-teleport)")
 
 -- ==================== BOOTH CLAIMER ====================
 local function getBoothLocation()

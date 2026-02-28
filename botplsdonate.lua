@@ -2,7 +2,7 @@
 local PLACE_ID = 8737602449                            -- Please Donate place ID
 local MIN_PLAYERS = 4                                  -- Minimum players in server (overridable from dashboard)
 local MAX_PLAYERS_ALLOWED = 24                         -- Maximum players in server (overridable from dashboard)
-local SERVER_COOLDOWN_MINS = 60                        -- Minutes to avoid rejoining a visited server (overridable)
+local SERVER_COOLDOWN_MINS = 150                       -- Minutes to avoid rejoining a visited server (overridable)
 local TELEPORT_RETRY_DELAY = 8                         -- Delay between teleport attempts
 local TELEPORT_COOLDOWN = 30                           -- Cooldown between failed servers
 local SCRIPT_URL = "https://raw.githubusercontent.com/ivankodaria5-ai/plsdonatebot/main/botplsdonate.lua"

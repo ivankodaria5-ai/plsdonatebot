@@ -219,12 +219,14 @@ local MSGS_THANKS = {
 
 -- Dream item goal (chosen once at script start, used in getFirstMsg)
 local DREAM_ITEMS = {
-    {name = "Headless Horseman", price = 31000},
-    {name = "Korblox",           price = 17000},
-    {name = "a domino crown",    price = 10300},
-    {name = "my dream gamepass", price = 1000},
-    {name = "a limited item",    price = 5000},
-    {name = "my fav ugc hat",    price = 800},
+    {name = "this cute hat i saw",    price = 500},
+    {name = "a hoodie i want",        price = 300},
+    {name = "this jacket i rly want", price = 400},
+    {name = "a ugc hat i found",      price = 450},
+    {name = "this fit i saw",         price = 350},
+    {name = "a beanie i want",        price = 250},
+    {name = "this cool shirt",        price = 200},
+    {name = "an outfit i found",      price = 600},
 }
 local dreamItem = DREAM_ITEMS[math.random(#DREAM_ITEMS)]
 -- NOTE: getNeeded() is defined later (after Stats) to avoid upvalue bug

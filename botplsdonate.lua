@@ -400,6 +400,29 @@ local function wasVisited(data, jobId, cooldownMins)
     return ts ~= nil and (tick() - ts) < (cooldownMins * 60)
 end
 
+-- ==================== OCCUPIED SERVERS FETCH ====================
+-- Returns a set { [serverId] = true } of servers already occupied by our bots.
+-- Used during server hop to avoid putting two bots on the same server.
+local function fetchOccupiedServers()
+    local occupied = {}
+    if DASH_URL == "" then return occupied end
+    local ok, resp = pcall(function()
+        return httprequest({ Url = DASH_URL .. "/pd_occupied_servers" })
+    end)
+    if ok and resp and resp.StatusCode == 200 and resp.Body then
+        local parseOk, data = pcall(function() return HttpService:JSONDecode(resp.Body) end)
+        if parseOk and type(data) == "table" and type(data.occupied) == "table" then
+            for serverId, botName in pairs(data.occupied) do
+                occupied[tostring(serverId)] = true
+            end
+            local count = 0
+            for _ in pairs(occupied) do count = count + 1 end
+            log("[HOP] Occupied servers from dashboard: " .. count)
+        end
+    end
+    return occupied
+end
+
 -- ==================== DASHBOARD CONFIG FETCH ====================
 local function fetchDashConfig()
     if DASH_URL == "" then return end
@@ -1575,7 +1598,9 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
         SERVER_COOLDOWN_MINS))
 
     -- ── Step 1: ONE API call to find a populated server ──────────────────────
-    -- No retry loop, no pagination — if it fails for any reason, skip to Step 2
+    -- Excludes: current server, recently visited, servers with our bots already.
+    local occupied = fetchOccupiedServers()
+
     local foundServer = nil
     local apiOk, apiResp = pcall(function()
         return httprequest({
@@ -1592,20 +1617,23 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
             local candidates = {}
             for _, s in ipairs(body.data) do
                 if type(s) == "table" and s.id
-                   and s.id ~= tostring(game.JobId)                    -- not current
+                   and s.id ~= tostring(game.JobId)                        -- not current
                    and not wasVisited(visited, s.id, SERVER_COOLDOWN_MINS)  -- not recently visited
+                   and not occupied[tostring(s.id)]                         -- no other bot there
                    and tonumber(s.playing) and tonumber(s.playing) >= MIN_PLAYERS
                    and tonumber(s.playing) <= MAX_PLAYERS_ALLOWED then
                     table.insert(candidates, s)
                 end
             end
             if #candidates > 0 then
+                -- Pick randomly from top-5 candidates so bots don't all pile into same server
                 table.sort(candidates, function(a, b) return (a.playing or 0) > (b.playing or 0) end)
-                foundServer = candidates[1]
-                log(string.format("[HOP] API found %d candidates, picked server with %d players",
+                local pickFrom = math.min(5, #candidates)
+                foundServer = candidates[math.random(pickFrom)]
+                log(string.format("[HOP] %d candidates (bot-free), picked server with %d players",
                     #candidates, foundServer.playing or 0))
             else
-                log("[HOP] API: no new unvisited suitable servers found")
+                log("[HOP] API: no suitable bot-free servers found — using matchmaking")
             end
         end
     elseif apiOk and apiResp then

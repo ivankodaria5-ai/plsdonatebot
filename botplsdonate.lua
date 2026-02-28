@@ -849,50 +849,40 @@ log("=== HOME SET TO: " .. tostring(HOME_POSITION) .. " ===")
 saveLog()
 
 -- ==================== BOOTH FADE MONITOR ====================
--- "YourBooth is fading out" = game unclaims booth when bot walks away too long.
--- This background loop checks every 15s if we still own a booth;
--- if not, it immediately re-claims one and updates HOME_POSITION.
--- Also briefly walks the bot BACK to its booth every 45s to prevent the
--- game's idle-fade timer from triggering (keepalive proximity visit).
-local boothLostCount = 0
-local lastBoothVisitTime = tick()
+-- "YourBooth is fading out" = game unclaims booth when bot walks away.
+-- Checks every 20s; requires 2 CONSECUTIVE misses before re-claiming
+-- to avoid false positives from BoothUI temporarily not loading.
+local boothMissStreak = 0  -- consecutive checks where booth wasn't found
 
 task.spawn(function()
-    task.wait(20)  -- Give initial claim time to settle
+    task.wait(25)  -- Give initial claim + BoothUI time to settle
     while isActiveInstance() do
-        task.wait(15)
+        task.wait(20)
         if not isActiveInstance() then break end
         pcall(function()
             local boothLocation = getBoothLocation()
-            if not boothLocation then return end
+            if not boothLocation then return end  -- UI not loaded, skip
             local existing = findOwnedBooth(boothLocation)
             if existing then
+                -- Booth alive — update position and reset streak
                 HOME_POSITION = existing
-                boothLostCount = 0
-                -- Keepalive: if bot hasn't been home in 45s, teleport briefly to booth
-                if tick() - lastBoothVisitTime > 45 then
-                    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                    if root and (root.Position - HOME_POSITION).Magnitude > 30 then
-                        log("[BOOTH-MONITOR] Keepalive: briefly visiting booth to prevent fade")
-                        local oldPos = root.CFrame
-                        root.CFrame = CFrame.new(HOME_POSITION + Vector3.new(0, 0, 2))
-                        task.wait(0.5)
-                        root.CFrame = oldPos
-                    end
-                    lastBoothVisitTime = tick()
-                end
+                boothMissStreak = 0
             else
-                boothLostCount = boothLostCount + 1
-                log("[BOOTH-MONITOR] Booth faded! #" .. boothLostCount .. " — reclaiming immediately...")
-                claimedBoothNum = nil
-                BOOTH_CLAIM_DEADLINE = nil
-                local newPos = claimBooth()
-                if newPos then
-                    HOME_POSITION = newPos
-                    lastBoothVisitTime = tick()
-                    log("[BOOTH-MONITOR] Re-claimed! New HOME: " .. tostring(HOME_POSITION))
-                else
-                    log("[BOOTH-MONITOR] Re-claim failed — will retry in 15s")
+                boothMissStreak = boothMissStreak + 1
+                log("[BOOTH-MONITOR] Booth not found (miss #" .. boothMissStreak .. "/2)")
+                -- Only re-claim after 2 consecutive misses (~40s) to avoid false triggers
+                if boothMissStreak >= 2 then
+                    boothMissStreak = 0
+                    log("[BOOTH-MONITOR] Booth confirmed gone — reclaiming...")
+                    claimedBoothNum = nil
+                    BOOTH_CLAIM_DEADLINE = nil
+                    local newPos = claimBooth()
+                    if newPos then
+                        HOME_POSITION = newPos
+                        log("[BOOTH-MONITOR] Re-claimed OK: " .. tostring(HOME_POSITION))
+                    else
+                        log("[BOOTH-MONITOR] Re-claim failed — will retry next cycle")
+                    end
                 end
             end
         end)
@@ -1483,25 +1473,20 @@ local function nextPlayer()
         if result == "yes" then
             -- ── Agreed ──
             sendChat(MSG_FOLLOW_ME)
-            -- Verify booth still exists before guiding player there.
-            -- "YourBooth is fading out" means the game unclamed it while bot was chasing.
-            -- Re-claim immediately so the player has somewhere to donate.
+            -- Sync HOME_POSITION with the actual booth position before guiding.
+            -- Only re-claim if the booth is CONFIRMED gone (claimedBoothNum already nil).
             pcall(function()
                 local boothLocation = getBoothLocation()
-                if boothLocation then
-                    local existing = findOwnedBooth(boothLocation)
-                    if not existing then
-                        log("[BOOTH-GUIDE] Booth faded before guiding player — reclaiming NOW")
-                        claimedBoothNum = nil
-                        BOOTH_CLAIM_DEADLINE = nil
-                        local newPos = claimBooth()
-                        if newPos then
-                            HOME_POSITION = newPos
-                            log("[BOOTH-GUIDE] Re-claimed! New HOME: " .. tostring(HOME_POSITION))
-                        end
-                    else
-                        HOME_POSITION = existing
-                    end
+                if not boothLocation then return end
+                local existing = findOwnedBooth(boothLocation)
+                if existing then
+                    HOME_POSITION = existing  -- keep position accurate
+                elseif not claimedBoothNum then
+                    -- Monitor already cleared claimedBoothNum — safe to re-claim
+                    log("[BOOTH-GUIDE] No booth and claimedBoothNum=nil — reclaiming before guide")
+                    BOOTH_CLAIM_DEADLINE = nil
+                    local newPos = claimBooth()
+                    if newPos then HOME_POSITION = newPos end
                 end
             end)
             returnHome()

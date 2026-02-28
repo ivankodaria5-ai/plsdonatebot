@@ -167,14 +167,39 @@ local MSGS_LEAVING = {
     "changing server soon quick donate?",
 }
 local COMPLIMENTS = {
-    "nice outfit",
-    "ur booth looks nice",
-    "cool avatar ngl",
-    "ur style is fire",
-    "love the fit",
-    "cute avatar lol",
-    "ur booth setup is clean",
-    "nice look fr",
+    "ur fit goes hard ngl",
+    "ok ur avatar is actually so clean",
+    "love the fit fr",
+    "ur style lowkey fire",
+    "ur look is actually cool tho",
+    "ur avatar is so cute omg",
+    "bro ur outfit slaps",
+    "ur fit is bussin fr",
+    "ngl i fw ur style",
+    "ur drip different fr",
+    "ok i fw the fit",
+    "ur avatar aesthetic is clean",
+    "no way ur fit goes that hard",
+    "ok ur look is actually clean",
+}
+
+-- Donation asks that flow AFTER a compliment — no re-greeting, natural transition
+local MSGS_POST_COMPLIMENT = {
+    "anyways could u donate? lol",
+    "btw wanna donate? tryna save up",
+    "ngl could u spare some robux?",
+    "also help me out? any amount fr",
+    "on a diff note donate? tryna grind",
+    "speaking of which donate? lol",
+    "btw could u help me out? even a lil",
+    "also im so broke rn donate pls lol",
+    "anyways u got any robux to spare?",
+    "ik its random but pls donate lol",
+    "btw donate? would actually help me so much",
+    "random but can u donate? would mean a lot",
+    "anyway do u have spare robux? lol",
+    "also tryna get some robux donate?",
+    "ngl could use some help donate pls",
 }
 local MSGS_GOODBYE = {
     "no worries gl with ur booth",
@@ -1382,17 +1407,36 @@ local function nextPlayer()
     doIdleAction()
 
     if chasePlayer(target) then
-        -- Compliment first (reciprocity principle), then donation request
+        -- Compliment first, then donation ask that naturally follows (no re-greeting)
         local compliment = COMPLIMENTS[math.random(#COMPLIMENTS)]
         sendChatTyped(compliment)
-        task.wait(math.random() * 0.5 + 1.5)   -- 1.5–2.0s pause
+        task.wait(math.random() * 0.6 + 1.2)   -- 1.2–1.8s pause
 
-        local openingMsg = getFirstMsg(target)  -- context-aware pool + optional name + leavingSoon
+        -- 25% chance: dream-item line; otherwise post-compliment ask or leavingSoon
+        local openingMsg
+        if leavingSoon and math.random(2) == 1 then
+            openingMsg = MSGS_LEAVING[math.random(#MSGS_LEAVING)]
+        elseif math.random(4) == 1 then
+            local dreamLines = {
+                "ngl saving for " .. dreamItem.name .. " could u donate?",
+                "btw trying to get " .. dreamItem.name .. " help me out?",
+                "also.. want " .. dreamItem.name .. " so bad donate pls lol",
+                "tryna save for " .. dreamItem.name .. " any robux?",
+            }
+            openingMsg = dreamLines[math.random(#dreamLines)]
+        else
+            openingMsg = MSGS_POST_COMPLIMENT[math.random(#MSGS_POST_COMPLIMENT)]
+        end
+        -- 30% chance: prefix with player's name for personal touch
+        if math.random(10) <= 3 then
+            openingMsg = target.Name .. " " .. openingMsg
+        end
+
         sendChatTyped(openingMsg)
         Stats.approached += 1
         lastBeggingTime = tick()
         leavingSoon = false
-        -- Brief pause after sending message: just stand close and face the player
+        -- Brief 2s face-and-follow before waiting for reply
         do
             local elapsed = 0
             while elapsed < 2 do
@@ -1413,31 +1457,40 @@ local function nextPlayer()
         end
 
         -- ── Wait for response helper ──────────────────────────────
-        -- Returns outcome ("yes"|"no"|"timeout"|"left"), player's reply text
+        -- Bot follows the target for the full wait duration — player can't "run away".
+        -- Only returns "left" if the character actually disappears (quit / respawned).
         local function waitForResponse(waitTime)
             resetResponse()
             local start = tick()
+            -- Smart match: single-char words must be entire message; longer = substring
+            local function matches(text, word)
+                if #word <= 1 then
+                    return text:match("^%s*" .. word .. "%s*$") ~= nil
+                end
+                return text:find(word, 1, true) ~= nil
+            end
             while tick() - start < waitTime do
+                -- Check if player actually left the game
                 if not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
-                    log("[WAIT] Target left")
+                    log("[WAIT] Target left the game")
                     return "left", ""
                 end
                 local root       = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
                 local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
-                if root and targetRoot then
-                    local targetPos = targetRoot.Position
-                    -- If player ran more than 20 studs away — treat as left
-                    if (root.Position - targetPos).Magnitude > 20 then
-                        log("[WAIT] Target moved >20 studs — treating as left")
+                local humanoid   = player.Character and player.Character:FindFirstChild("Humanoid")
+                if root and targetRoot and humanoid then
+                    local dist = (root.Position - targetRoot.Position).Magnitude
+                    if dist > 80 then
+                        -- Truly unreachable (teleported / fell off map) — give up
+                        log("[WAIT] Target unreachable (>80 studs) — giving up")
                         return "left", ""
                     end
-                    -- Always stay 2 studs in front of player's face
+                    -- Chase: stay 2 studs in front of player's face at all times
                     local frontPos = Vector3.new(
                         (targetRoot.Position + targetRoot.CFrame.LookVector * 2).X,
                         targetRoot.Position.Y,
                         (targetRoot.Position + targetRoot.CFrame.LookVector * 2).Z)
-                    local humanoid = player.Character:FindFirstChild("Humanoid")
-                    if humanoid and (root.Position - frontPos).Magnitude > 2 then
+                    if (root.Position - frontPos).Magnitude > 3 then
                         humanoid:MoveTo(frontPos)
                     end
                     faceTargetBriefly(target)
@@ -1446,13 +1499,6 @@ local function nextPlayer()
                     local msg = lastMessage
                     lastActivityTime = tick()
                     log("[RESPONSE] " .. target.Name .. " said: " .. msg)
-                    -- Smart match: single-char words must be entire message; longer = substring
-                    local function matches(text, word)
-                        if #word <= 1 then
-                            return text:match("^%s*" .. word .. "%s*$") ~= nil
-                        end
-                        return text:find(word, 1, true) ~= nil
-                    end
                     local saidYes = false
                     for _, word in ipairs(YES_LIST) do
                         if matches(msg, word) then saidYes = true; break end

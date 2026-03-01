@@ -42,7 +42,39 @@ local MESSAGES = {
     "hey donate pls :)",
     "hi! any donations? been grinding all day",
     "hello robux pls",
-    "hey! pls donate"
+    "hey! pls donate",
+    -- more realistic / how players actually type
+    "pls donate me",
+    "any robux? pls",
+    "donate plz ty",
+    "trying to save for something donate?",
+    "need robux fr can u help",
+    "spare some r$?",
+    "could use a donation ngl",
+    "any donation helps fr",
+    "donate if u can :)",
+    "broke rn donate pls lol",
+    "pls donate even 1 helps",
+    "hey donate ty",
+    "anyone donate?",
+    "donations appreciated",
+    "yo donate pls",
+    "hi im tryna save up donate?",
+    "donate pls trying to get a gamepass",
+    "hey could u spare any?",
+    "any r$ helps pls",
+    "pls donate for my goal",
+    "donate? would mean sm",
+    "hi need some robux pls",
+    "hey any amount works",
+    "donate pls im poor lol",
+    "trying to reach my goal donate?",
+    "yo anyone wanna donate",
+    "pls donate me ty",
+    "could u donate? tryna save",
+    "donate pls :(",
+    "hey spare some robux?",
+    "any donations? pls",
 }
 
 -- Typo variations (3 per message, realistic keyboard mistakes)
@@ -78,6 +110,40 @@ local MESSAGE_TYPOS = {
     {"hrllo robux pls", "hello robix pls", "hello robux pld"},
     {"hry! pls donate", "hey! pld donate", "hey! pls dknate"}
 }
+-- Extra typo rows for MESSAGES 32+ (same count as extra MESSAGES)
+local MESSAGE_TYPOS_EXTRA = {
+    {"pld donate me", "pls dinate me", "pls donate ne"},
+    {"any robix? pls", "any robux? pld", "any robux? pls"},
+    {"dinate plz ty", "donate plz ry", "donate plx ty"},
+    {"tryinf to save for something donate?", "trying to save for somethibg donate?", "trying to save for something dinate?"},
+    {"need robux fr can u hwlp", "need robix fr can u help", "need robux fr csn u help"},
+    {"spare some r$?", "spare sme r$?", "spare some r$?"},
+    {"could use a donatiom ngl", "could use a donation ngl", "could use a donaton ngl"},
+    {"any donation helps fr", "any donatiom helps fr", "any donation hwlps fr"},
+    {"donate if u can :)", "dinate if u can :)", "donate if u csn :)"},
+    {"broke rn donate pls lol", "broke rn dinate pls lol", "broke rn donate pld lol"},
+    {"pls donate even 1 helps", "pld donate even 1 helps", "pls dinate even 1 helps"},
+    {"hey dinate ty", "hey donate ry", "hry donate ty"},
+    {"anyone donate?", "anyone dinate?", "anyone donate?"},
+    {"donations appreciated", "donatioms appreciated", "donations apprexiated"},
+    {"yo dinate pls", "yo donate pld", "yo donate pls"},
+    {"hi im tryna save up donate?", "hi im tryna save up dinate?", "hi im tryna sav eup donate?"},
+    {"donate pls trying to get a gamepass", "dinate pls trying to get a gamepass", "donate pld trying to get a gamepass"},
+    {"hey could u spare any?", "hry could u spare any?", "hey could u spare any?"},
+    {"any r$ helps pls", "any r$ hwlps pls", "any r$ helps pld"},
+    {"pls donate for my goal", "pld donate for my goal", "pls dinate for my goal"},
+    {"donate? would mean sm", "dinate? would mean sm", "donate? woulf mean sm"},
+    {"hi need some robux pls", "hi need some robix pls", "hi need sme robux pls"},
+    {"hey any amount works", "hry any amount works", "hey any amouny works"},
+    {"donate pls im poor lol", "dinate pls im poor lol", "donate pld im poor lol"},
+    {"trying to reach my goal donate?", "tryinf to reach my goal donate?", "trying to reach my goal dinate?"},
+    {"yo anyone wanna donate", "yo anyone wann donate", "yo anyone wanna dinate"},
+    {"pls donate me ty", "pld donate me ty", "pls dinate me ty"},
+    {"could u donate? tryna save", "could u dinate? tryna save", "could u donate? tryna sav e"},
+    {"donate pls :(", "dinate pls :(", "donate pld :("},
+    {"hey spare some robux?", "hry spare some robux?", "hey spare some robix?"},
+    {"any donations? pls", "any donatioms? pls", "any donations? pld"},
+}
 
 local WAIT_FOR_ANSWER_TIME = 7        -- seconds to wait for reply
 local MAX_WAIT_DISTANCE = 10              -- max distance before following player while waiting
@@ -112,6 +178,10 @@ local NO_RESPONSE_MSGS = {
     "not responding, next!",
     "guess they busy okay",
     "okay bye then lol",
+    "no reply ok",
+    "afk probably",
+    "alright next person",
+    "ok moving on",
 }
 
 -- Guilt-trip second message (sent after refusal, no wait for response)
@@ -122,6 +192,12 @@ local MSGS_SECOND = {
     "np i understand just tryna get some",
     "ok fine sorry for asking lol",
     "alright :( maybe someone else",
+    "ok np",
+    "aw alright",
+    "okay no worries",
+    "damn ok",
+    "alright maybe next time",
+    "np gl anyway",
 }
 
 -- Contextual message pools by target's Raised amount
@@ -134,6 +210,16 @@ local MSGS_EMPTY = {
     "umm hi could u spare some robux",
     "donate pls im just starting out",
     "hey! help me out? even a little is fine",
+    "pls donate 0 raised rn lol",
+    "any robux? i have nothing",
+    "donate pls tryna get my first r$",
+    "hey im new here donate?",
+    "could use any donation rn",
+    "anyone spare some? just started",
+    "donate pls goal is like 50 r$",
+    "hi literally any amount",
+    "pls donate me im broke",
+    "trying to save from 0 donate?",
 }
 local MSGS_LOW = {
     "hey we both grinding, support each other?",
@@ -143,6 +229,13 @@ local MSGS_LOW = {
     "we both starting out, donate pls?",
     "bro donate pls i need robux",
     "hey spare some? tryna catch up",
+    "yo we both low on r$ donate?",
+    "even 10 r$ would help pls",
+    "donate? tryna get where u at",
+    "hey small donation? pls",
+    "we in the same boat donate pls",
+    "could u spare a bit? tryna save",
+    "donate pls we both grinding",
 }
 local MSGS_MID = {
     "yo ur doing well, spare some for me?",
@@ -151,6 +244,12 @@ local MSGS_MID = {
     "hey looks like ur doing good, help me out?",
     "u got donations u know how it feels, donate?",
     "damn nice raised, share some? lol",
+    "ur booth doing good donate?",
+    "hey u got some to spare",
+    "nice numbers could u donate?",
+    "u know the grind donate pls?",
+    "hey share the wealth lol",
+    "ur doing good help me out?",
 }
 local MSGS_RICH = {
     "yo ur rich donate pls",
@@ -159,12 +258,24 @@ local MSGS_RICH = {
     "ok ur booth doing great mine isnt, donate?",
     "hey big numbers on ur booth share some?",
     "ur doing amazing, spare a lil for me?",
+    "damn ur loaded donate pls",
+    "yo u got heaps spare some?",
+    "ur raised is insane donate?",
+    "hey rich person donate lol",
+    "u dont need it all donate?",
+    "spare some of that r$? pls",
 }
 local MSGS_LEAVING = {
     "leaving this server soon if anyone wants to donate",
     "bout to hop, anyone wanna donate quick",
     "last chance before i leave lol",
     "changing server soon quick donate?",
+    "gonna leave in a sec donate?",
+    "hopping soon anyone donate quick",
+    "last call for donations lol",
+    "bout to switch servers donate?",
+    "leaving in a min quick donate pls",
+    "server hop soon donate if u can",
 }
 local COMPLIMENTS = {
     "ur fit goes hard ngl",
@@ -181,6 +292,12 @@ local COMPLIMENTS = {
     "ur avatar aesthetic is clean",
     "no way ur fit goes that hard",
     "ok ur look is actually clean",
+    "ur avatar goes crazy",
+    "fire fit ngl",
+    "ur style is so good",
+    "love ur avatar fr",
+    "ur outfit is fire",
+    "that fit hits different",
 }
 
 -- Donation asks that flow AFTER a compliment — no re-greeting, natural transition
@@ -200,6 +317,11 @@ local MSGS_POST_COMPLIMENT = {
     "anyway do u have spare robux? lol",
     "also tryna get some robux donate?",
     "ngl could use some help donate pls",
+    "anyways donate? tryna save",
+    "btw spare some r$? pls",
+    "also could u donate? would help",
+    "random ask but donate pls",
+    "anyway tryna get donations lol",
 }
 local MSGS_GOODBYE = {
     "no worries gl with ur booth",
@@ -208,6 +330,10 @@ local MSGS_GOODBYE = {
     "ok no worries enjoy the game",
     "all g have a good one",
     "its fine gl",
+    "alright gl",
+    "np have a good one",
+    "ok gl dude",
+    "no prob gl",
 }
 local MSGS_THANKS = {
     "hey just wanted to say thank u for the donation!! that was really nice",
@@ -215,18 +341,30 @@ local MSGS_THANKS = {
     "omg thank you so much!! u made my day fr",
     "seriously thank you ur the best",
     "hey ty so much for the donation!! really appreciate it",
+    "ty!! that was so nice of u",
+    "thank u sm!!",
+    "bro ty fr that helped a lot",
+    "omg ty!! u didnt have to",
+    "thank u!! means a lot fr",
 }
 
 -- Dream item goal (chosen once at script start, used in getFirstMsg)
 local DREAM_ITEMS = {
-    {name = "this cute hat i saw",    price = 500},
-    {name = "a hoodie i want",        price = 300},
-    {name = "this jacket i rly want", price = 400},
-    {name = "a ugc hat i found",      price = 450},
-    {name = "this fit i saw",         price = 350},
-    {name = "a beanie i want",        price = 250},
-    {name = "this cool shirt",        price = 200},
-    {name = "an outfit i found",      price = 600},
+    {name = "this cute hat i saw",    price = 50},
+    {name = "a hoodie i want",        price = 100},
+    {name = "this jacket i rly want", price = 50},
+    {name = "a ugc hat i found",      price = 100},
+    {name = "this fit i saw",         price = 50},
+    {name = "a beanie i want",        price = 10},
+    {name = "this cool shirt",       price = 10},
+    {name = "an outfit i found",      price = 100},
+    {name = "a gamepass i want",      price = 50},
+    {name = "this accessory",        price = 5},
+    {name = "bloxburg",               price = 100},
+    {name = "a limited i like",       price = 100},
+    {name = "this hair i want",       price = 50},
+    {name = "some ugc i saw",         price = 10},
+    {name = "a face i want",          price = 10},
 }
 local dreamItem = DREAM_ITEMS[math.random(#DREAM_ITEMS)]
 -- NOTE: getNeeded() is defined later (after Stats) to avoid upvalue bug
@@ -240,6 +378,10 @@ local FRUSTRATION_MSGS = {
     "where are all the kind people?",
     "having bad luck today lol",
     "why everyone say no :(",
+    "no luck today",
+    "everyone said no lol",
+    "rough server",
+    "nobody donating rn",
 }
 
 local JUMP_TIME         = 5
@@ -681,6 +823,15 @@ local function verifyClaim(boothLocation, boothNum)
     local boothUI = boothLocation.BoothUI or boothLocation:FindFirstChild("BoothUI")
     if not boothUI then return false end
     local boothFrame = boothUI:FindFirstChild("BoothUI" .. boothNum)
+        or boothUI:FindFirstChild("BoothUI " .. boothNum)
+    if not boothFrame then
+        for _, f in ipairs(boothUI:GetChildren()) do
+            if tonumber(f.Name:match("%d+")) == boothNum then
+                boothFrame = f
+                break
+            end
+        end
+    end
     if not boothFrame then return false end
     local details = boothFrame:FindFirstChild("Details")
     if not details then return false end
@@ -698,6 +849,50 @@ local function walkRandomDirection(studs, waitTime)
         local movePos = root.Position + Vector3.new(math.cos(angle)*studs, 0, math.sin(angle)*studs)
         humanoid:MoveTo(movePos)
         task.wait(waitTime)
+    end
+end
+
+-- Alternative claim method 1: set HoldDuration = 0 so prompt triggers instantly (used by many PD scripts)
+local function tryClaimViaPromptInstant(claimPrompt)
+    local oldHold = nil
+    pcall(function()
+        if claimPrompt:IsA("ProximityPrompt") then
+            oldHold = claimPrompt.HoldDuration
+            claimPrompt.HoldDuration = 0
+        end
+    end)
+    pcall(function() fireproximityprompt(claimPrompt) end)
+    task.wait(1.5)
+    pcall(function()
+        if claimPrompt:IsA("ProximityPrompt") and oldHold ~= nil then
+            claimPrompt.HoldDuration = oldHold
+        end
+    end)
+end
+
+-- Alternative claim method 2: try RemoteEvents (game may use Remotes for claim instead of/alongside ProximityPrompt)
+local function tryClaimViaRemote(boothNum)
+    local possibleNames = {"ClaimBooth", "Claim", "BoothClaim", "RequestBooth", "TakeBooth", "ClaimStand"}
+    local containers = {}
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    if events then table.insert(containers, events) end
+    table.insert(containers, ReplicatedStorage)
+    for _, container in ipairs(containers) do
+        for _, name in ipairs(possibleNames) do
+            local remote = container:FindFirstChild(name)
+            if remote and (remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction")) then
+                local ok = pcall(function()
+                    if remote:IsA("RemoteEvent") then
+                        remote:FireServer(boothNum)
+                    else
+                        remote:InvokeServer(boothNum)
+                    end
+                end)
+                if ok then
+                    log("[BOOTH] Fired remote " .. name .. "(" .. tostring(boothNum) .. ")")
+                end
+            end
+        end
     end
 end
 
@@ -759,10 +954,10 @@ local BOOTH_CLAIM_DEADLINE = nil  -- set on first call
 
 local function claimBooth(retryCount)
     retryCount = retryCount or 0
-    -- Global deadline: max 120s total for booth claiming across all retries
-    if retryCount == 0 then BOOTH_CLAIM_DEADLINE = tick() + 120 end
+    -- Global deadline: max 180s total for booth claiming across all retries
+    if retryCount == 0 then BOOTH_CLAIM_DEADLINE = tick() + 180 end
     if BOOTH_CLAIM_DEADLINE and tick() > BOOTH_CLAIM_DEADLINE then
-        log("[BOOTH] ⏰ 120s deadline exceeded — skipping booth, using fallback")
+        log("[BOOTH] ⏰ 180s deadline exceeded — skipping booth, will hop")
         return nil
     end
     log("=== BOOTH CLAIMER ===")
@@ -818,7 +1013,7 @@ local function claimBooth(retryCount)
     for i, booth in ipairs(unclaimed) do
         -- Check deadline on every booth attempt
         if BOOTH_CLAIM_DEADLINE and tick() > BOOTH_CLAIM_DEADLINE then
-            log("[BOOTH] ⏰ Deadline hit mid-loop — aborting, using fallback")
+            log("[BOOTH] ⏰ Deadline hit mid-loop — aborting, will hop")
             return nil
         end
         log("═══════════════════════════════════════")
@@ -852,28 +1047,36 @@ local function claimBooth(retryCount)
             continue
         end
         
-        -- Try claiming this booth: multiple trigger + verify retries
+        -- Try claiming this booth: 3 methods per attempt (instant prompt, remote, then multi-fire prompt)
         local claimed = false
-        for attempt = 1, 3 do
+        for attempt = 1, 4 do
             -- Teleport closer to the ProximityPrompt's parent
             local targetCFrame = myBoothInteraction.CFrame * CFrame.new(0, 0, 2)
             teleportTo(targetCFrame)
             task.wait(0.8)
             
-            -- Trigger ProximityPrompt several times (server can miss single fire)
+            -- Method A: instant trigger (HoldDuration=0) — used by many other PD scripts
+            tryClaimViaPromptInstant(claimPrompt)
+            task.wait(2)
+            claimed = verifyClaim(boothLocation, booth.number)
+            if claimed then break end
+            
+            -- Method B: try RemoteEvent(s) if game uses them for claim
+            tryClaimViaRemote(booth.number)
+            task.wait(2)
+            claimed = verifyClaim(boothLocation, booth.number)
+            if claimed then break end
+            
+            -- Method C: standard multi-fire ProximityPrompt (server can miss single fire)
             for _ = 1, 5 do
                 pcall(function() fireproximityprompt(claimPrompt) end)
                 task.wait(0.35)
             end
-            
-            -- Wait for server to process
-            task.wait(3.5)
-            
-            -- Verify with retries (UI can update late)
-            for v = 1, 4 do
+            task.wait(4.5)
+            for v = 1, 5 do
                 claimed = verifyClaim(boothLocation, booth.number)
                 if claimed then break end
-                if v < 4 then task.wait(1.2) end
+                if v < 5 then task.wait(1.2) end
             end
             if claimed then
                 claimedBoothNum = booth.number  -- remember: don't claim again this session
@@ -884,13 +1087,13 @@ local function claimBooth(retryCount)
                 saveLog()
                 return booth.position
             else
-                if attempt < 3 then
+                if attempt < 4 then
                     log("[BOOTH] Claim didn't register, retrying...")
                 end
             end
         end
         
-        log("[BOOTH] Failed after 3 attempts, moving away from booth...")
+        log("[BOOTH] Failed after 4 attempts, moving away from booth...")
         walkRandomDirection(20, 2)
         log("[BOOTH] Moving to next booth...")
     end
@@ -898,17 +1101,17 @@ local function claimBooth(retryCount)
     log("[BOOTH] All booths tried, moving away before retrying...")
     walkRandomDirection(30, 3)
     retryCount = (retryCount or 0) + 1
-    if retryCount >= 3 then
-        log("[BOOTH] ⚠️ Failed after 3 full cycles — using fallback position and continuing")
+    if retryCount >= 5 then
+        log("[BOOTH] ⚠️ Failed after 5 full cycles — will hop to another server")
         return nil
     end
-    log("[BOOTH] Retrying from start (cycle " .. retryCount .. "/3)...")
+    log("[BOOTH] Retrying from start (cycle " .. retryCount .. "/5)...")
     return claimBooth(retryCount)
 end
 
 -- ── Startup server viability check ───────────────────────────────────────────
 -- Skip booth claim entirely if the server has too few players.
--- This prevents wasting 120s on an empty server arrived via matchmaking.
+-- This prevents wasting 180s on an empty server arrived via matchmaking.
 do
     task.wait(3)  -- give PlayerList a moment to populate after join
     local startupCount = #Players:GetPlayers()
@@ -930,11 +1133,16 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
     log(string.format("[STARTUP] Server OK: %d players — proceeding", startupCount))
 end
 
+-- Give BoothUI/MapUI time to load after join before claiming
+log("[BOOTH] Waiting 5s for booth UI to load...")
+task.wait(5)
+
 -- CLAIM BOOTH AND SET HOME POSITION
 local HOME_POSITION = claimBooth()
 if not HOME_POSITION then
-    log("[BOOTH] Failed to claim booth! Using default position.")
-    HOME_POSITION = Vector3.new(94, 4, 281)  -- Fallback position
+    log("[BOOTH] Failed to claim booth! Hopping to another server (no begging without booth).")
+    pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+    return  -- teleport will trigger queued script on new server
 end
 log("=== HOME SET TO: " .. tostring(HOME_POSITION) .. " ===")
 saveLog()
@@ -1348,10 +1556,16 @@ end
 local function getRandomMessage()
     local msgIndex = math.random(#MESSAGES)
     if math.random() < TYPO_CHANCE then
-        return MESSAGE_TYPOS[msgIndex][math.random(3)]
-    else
-        return MESSAGES[msgIndex]
+        if msgIndex <= #MESSAGE_TYPOS then
+            return MESSAGE_TYPOS[msgIndex][math.random(3)]
+        else
+            local extraIdx = msgIndex - #MESSAGE_TYPOS
+            if MESSAGE_TYPOS_EXTRA and MESSAGE_TYPOS_EXTRA[extraIdx] then
+                return MESSAGE_TYPOS_EXTRA[extraIdx][math.random(3)]
+            end
+        end
     end
+    return MESSAGES[msgIndex]
 end
 
 -- ========= CONTEXT-AWARE FIRST MESSAGE =========
@@ -1426,6 +1640,10 @@ local function getFirstMsg(t)
             "trying to get " .. dreamItem.name .. " any help appreciated",
             "so close to getting " .. dreamItem.name .. " help me out?",
             "want " .. dreamItem.name .. " so bad, any donation helps",
+            "tryna save for " .. dreamItem.name .. " donate?",
+            "goal is " .. dreamItem.name .. " pls donate",
+            "need r$ for " .. dreamItem.name .. " help?",
+            "grinding for " .. dreamItem.name .. " any robux helps",
         }
         base = dreamLines[math.random(#dreamLines)]
     else
@@ -1465,6 +1683,9 @@ local function nextPlayer()
                 "btw trying to get " .. dreamItem.name .. " help me out?",
                 "also.. want " .. dreamItem.name .. " so bad donate pls lol",
                 "tryna save for " .. dreamItem.name .. " any robux?",
+                "goal is " .. dreamItem.name .. " donate pls",
+                "need r$ for " .. dreamItem.name .. " spare some?",
+                "grinding for " .. dreamItem.name .. " could u help?",
             }
             openingMsg = dreamLines[math.random(#dreamLines)]
         else

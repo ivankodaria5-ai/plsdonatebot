@@ -1093,6 +1093,17 @@ local function claimBooth(retryCount)
             end
         end
         
+        -- If we broke from attempt loop because Method A or B succeeded, we have claimed but didn't return yet
+        if claimed then
+            claimedBoothNum = booth.number
+            log("╔═══════════════════════════════════════")
+            log("║ [SUCCESS] CLAIMED BOOTH #" .. booth.number .. "!")
+            log("║ Position: " .. tostring(booth.position))
+            log("╚═══════════════════════════════════════")
+            saveLog()
+            return booth.position
+        end
+        
         log("[BOOTH] Failed after 4 attempts, moving away from booth...")
         walkRandomDirection(20, 2)
         log("[BOOTH] Moving to next booth...")

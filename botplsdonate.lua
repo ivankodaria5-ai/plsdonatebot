@@ -1765,11 +1765,15 @@ local function nextPlayer()
         end
 
         -- ── Wait for response helper ──────────────────────────────
-        -- Bot follows the target for the full wait duration — player can't "run away".
+        -- Bot ALWAYS follows the target for the full wait duration (sprint + stuck recovery).
         -- Only returns "left" if the character actually disappears (quit / respawned).
         local function waitForResponse(waitTime)
             resetResponse()
             local start = tick()
+            startSprinting()
+            local lastDist = 9999
+            local stuckFollowTime = 0
+            local FOLLOW_STUCK_SEC = 2.5
             -- Smart match: single-char words must be entire message; longer = substring
             local function matches(text, word)
                 if #word <= 1 then
@@ -1781,6 +1785,7 @@ local function nextPlayer()
                 -- Check if player actually left the game
                 if not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
                     log("[WAIT] Target left the game")
+                    stopSprinting()
                     return "left", ""
                 end
                 local root       = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -1789,19 +1794,56 @@ local function nextPlayer()
                 if root and targetRoot and humanoid then
                     local dist = (root.Position - targetRoot.Position).Magnitude
                     if dist > 80 then
-                        -- Truly unreachable (teleported / fell off map) — give up
                         log("[WAIT] Target unreachable (>80 studs) — giving up")
+                        stopSprinting()
                         return "left", ""
                     end
-                    -- Chase: stay 2 studs in front of player's face at all times
+                    -- Chase: stay 2 studs in front of player's face — always move if > 4 studs so we keep following
                     local frontPos = Vector3.new(
                         (targetRoot.Position + targetRoot.CFrame.LookVector * 2).X,
                         targetRoot.Position.Y,
                         (targetRoot.Position + targetRoot.CFrame.LookVector * 2).Z)
-                    if (root.Position - frontPos).Magnitude > 3 then
+                    if (root.Position - frontPos).Magnitude > 4 then
                         humanoid:MoveTo(frontPos)
                     end
                     faceTargetBriefly(target)
+                    
+                    -- Stuck detection: not getting closer for FOLLOW_STUCK_SEC
+                    if dist >= lastDist - 0.5 then
+                        stuckFollowTime = stuckFollowTime + 0.2
+                    else
+                        stuckFollowTime = 0
+                    end
+                    lastDist = dist
+                    
+                    if stuckFollowTime >= FOLLOW_STUCK_SEC then
+                        stuckFollowTime = 0
+                        -- 1) Jump several times
+                        for _ = 1, 4 do
+                            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+                            task.wait(0.25)
+                            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+                            task.wait(0.2)
+                        end
+                        task.wait(0.5)
+                        local stillStuck = root and targetRoot and (root.Position - targetRoot.Position).Magnitude > 8
+                        if stillStuck then
+                            -- 2) Random dodge then back to target
+                            local a = math.random() * math.pi * 2
+                            local dodgePos = targetRoot.Position + Vector3.new(math.cos(a)*15, 0, math.sin(a)*15)
+                            humanoid:MoveTo(dodgePos)
+                            task.wait(1.5)
+                        end
+                        stillStuck = root and targetRoot and (root.Position - targetRoot.Position).Magnitude > 10
+                        if stillStuck then
+                            -- 3) Teleport near target (5 studs in front)
+                            pcall(function()
+                                root.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 5)
+                                task.wait(0.2)
+                            end)
+                            log("[WAIT] Unstuck: teleported near " .. target.Name)
+                        end
+                    end
                 end
                 if responseReceived and lastSpeaker == target.Name then
                     local msg = lastMessage
@@ -1815,11 +1857,12 @@ local function nextPlayer()
                     for _, word in ipairs(NO_LIST) do
                         if matches(msg, word) then saidNo = true; break end
                     end
-                    if saidYes then return "yes", msg end
-                    if saidNo  then return "no",  msg end
+                    if saidYes then stopSprinting(); return "yes", msg end
+                    if saidNo  then stopSprinting(); return "no",  msg end
                 end
                 task.wait(0.2)
             end
+            stopSprinting()
             return "timeout", ""
         end
         -- ─────────────────────────────────────────────────────────

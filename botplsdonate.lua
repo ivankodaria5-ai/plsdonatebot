@@ -427,6 +427,36 @@ local function wasVisited(data, jobId, cooldownMins)
     return ts ~= nil and (tick() - ts) < (cooldownMins * 60)
 end
 
+-- ==================== JUST-LEFT SERVER (avoid same server for 5 min) ====================
+-- So we never rejoin the server we just left (e.g. after matchmaking or API returning same server).
+local JUST_LEFT_FILE   = VISITED_FOLDER .. "/pd_just_left.json"
+local JUST_LEFT_MINS   = 5
+
+local function loadJustLeft()
+    pcall(function() if not isfolder(VISITED_FOLDER) then makefolder(VISITED_FOLDER) end end)
+    if pcall(function() return isfile(JUST_LEFT_FILE) end) and isfile(JUST_LEFT_FILE) then
+        local ok, data = pcall(function() return HttpService:JSONDecode(readfile(JUST_LEFT_FILE)) end)
+        if ok and type(data) == "table" then
+            local cutoff = tick() - (JUST_LEFT_MINS * 60)
+            local pruned = {}
+            for jobId, ts in pairs(data) do
+                if ts > cutoff then pruned[jobId] = ts end
+            end
+            return pruned
+        end
+    end
+    return {}
+end
+
+local function saveJustLeft(data)
+    pcall(function() writefile(JUST_LEFT_FILE, HttpService:JSONEncode(data)) end)
+end
+
+local function wasJustLeft(justLeftData, jobId)
+    local ts = justLeftData[jobId]
+    return ts ~= nil and (tick() - ts) < (JUST_LEFT_MINS * 60)
+end
+
 -- ==================== OCCUPIED SERVERS FETCH ====================
 -- Returns a set { [serverId] = true } of servers already occupied by our bots.
 -- Used during server hop to avoid putting two bots on the same server.
@@ -588,23 +618,27 @@ startKickRecovery()
 log("[267] Kick recovery monitor started (Error 267 auto-teleport)")
 
 -- ==================== BOOTH CLAIMER ====================
+-- Wait longer for UI to load after join (game can be slow)
+local BOOTH_UI_WAIT = 12
+
 local function getBoothLocation()
     local boothLocation = nil
     pcall(function()
-        boothLocation = player:WaitForChild('PlayerGui', 5)
-            :WaitForChild('MapUIContainer', 5)
-            :WaitForChild('MapUI', 5)
+        boothLocation = player:WaitForChild('PlayerGui', BOOTH_UI_WAIT)
+            :WaitForChild('MapUIContainer', BOOTH_UI_WAIT)
+            :WaitForChild('MapUI', BOOTH_UI_WAIT)
     end)
     if not boothLocation then
-        boothLocation = workspace:WaitForChild('MapUI', 5)
+        boothLocation = workspace:WaitForChild('MapUI', BOOTH_UI_WAIT)
     end
     return boothLocation
 end
 
-local function findUnclaimedBooths(boothLocation)
+-- includeAll: if true, return ALL unclaimed booths (no distance filter) so we always have a target
+local function findUnclaimedBooths(boothLocation, includeAll)
     local unclaimed = {}
-    local boothUI = boothLocation:WaitForChild("BoothUI", 5)
-    local interactions = workspace:WaitForChild("BoothInteractions", 5)
+    local boothUI = boothLocation:WaitForChild("BoothUI", BOOTH_UI_WAIT)
+    local interactions = workspace:WaitForChild("BoothInteractions", BOOTH_UI_WAIT)
     if not boothUI or not interactions then return unclaimed end
     local mainPos2D = Vector3.new(BOOTH_CHECK_POSITION.X, 0, BOOTH_CHECK_POSITION.Z)
     for _, uiFrame in ipairs(boothUI:GetChildren()) do
@@ -616,7 +650,7 @@ local function findUnclaimedBooths(boothLocation)
                         if interact:GetAttribute("BoothSlot") == boothNum then
                             local pos2D = Vector3.new(interact.Position.X, 0, interact.Position.Z)
                             local distance = (pos2D - mainPos2D).Magnitude
-                            if distance < MAX_BOOTH_DISTANCE then
+                            if includeAll or distance < MAX_BOOTH_DISTANCE then
                                 table.insert(unclaimed, {
                                     number = boothNum,
                                     position = interact.Position,
@@ -725,10 +759,10 @@ local BOOTH_CLAIM_DEADLINE = nil  -- set on first call
 
 local function claimBooth(retryCount)
     retryCount = retryCount or 0
-    -- Global deadline: max 90s total for booth claiming across all retries
-    if retryCount == 0 then BOOTH_CLAIM_DEADLINE = tick() + 90 end
+    -- Global deadline: max 120s total for booth claiming across all retries
+    if retryCount == 0 then BOOTH_CLAIM_DEADLINE = tick() + 120 end
     if BOOTH_CLAIM_DEADLINE and tick() > BOOTH_CLAIM_DEADLINE then
-        log("[BOOTH] ⏰ 90s deadline exceeded — skipping booth, using fallback")
+        log("[BOOTH] ⏰ 120s deadline exceeded — skipping booth, using fallback")
         return nil
     end
     log("=== BOOTH CLAIMER ===")
@@ -760,6 +794,12 @@ local function claimBooth(retryCount)
     end
 
     local unclaimed = findUnclaimedBooths(boothLocation)
+    if #unclaimed == 0 then
+        unclaimed = findUnclaimedBooths(boothLocation, true)
+        if #unclaimed > 0 then
+            log("[BOOTH] No booths in range — using all unclaimed booths on map")
+        end
+    end
     log("[BOOTH] Found " .. #unclaimed .. " unclaimed booth(s)")
     
     if #unclaimed == 0 then
@@ -812,28 +852,29 @@ local function claimBooth(retryCount)
             continue
         end
         
-        -- Try claiming this booth up to 3 times
+        -- Try claiming this booth: multiple trigger + verify retries
         local claimed = false
         for attempt = 1, 3 do
             -- Teleport closer to the ProximityPrompt's parent
             local targetCFrame = myBoothInteraction.CFrame * CFrame.new(0, 0, 2)
             teleportTo(targetCFrame)
-            task.wait(0.5)
+            task.wait(0.8)
             
-            -- Trigger ProximityPrompt
-            local success, err = pcall(function()
-                fireproximityprompt(claimPrompt)
-            end)
-            
-            if not success then
-                log("[BOOTH] ProximityPrompt trigger failed: " .. tostring(err))
+            -- Trigger ProximityPrompt several times (server can miss single fire)
+            for _ = 1, 5 do
+                pcall(function() fireproximityprompt(claimPrompt) end)
+                task.wait(0.35)
             end
             
             -- Wait for server to process
-            task.wait(2)
+            task.wait(3.5)
             
-            -- Verify claim
-            claimed = verifyClaim(boothLocation, booth.number)
+            -- Verify with retries (UI can update late)
+            for v = 1, 4 do
+                claimed = verifyClaim(boothLocation, booth.number)
+                if claimed then break end
+                if v < 4 then task.wait(1.2) end
+            end
             if claimed then
                 claimedBoothNum = booth.number  -- remember: don't claim again this session
                 log("╔═══════════════════════════════════════")
@@ -867,7 +908,7 @@ end
 
 -- ── Startup server viability check ───────────────────────────────────────────
 -- Skip booth claim entirely if the server has too few players.
--- This prevents wasting 90s on an empty server arrived via matchmaking.
+-- This prevents wasting 120s on an empty server arrived via matchmaking.
 do
     task.wait(3)  -- give PlayerList a moment to populate after join
     local startupCount = #Players:GetPlayers()
@@ -1645,6 +1686,12 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
         (function() local n=0 for _ in pairs(visited) do n=n+1 end return n end)(),
         SERVER_COOLDOWN_MINS))
 
+    -- Mark current server as "just left" so we don't rejoin it for 5 min
+    local justLeft = loadJustLeft()
+    justLeft[tostring(game.JobId)] = tick()
+    saveJustLeft(justLeft)
+    log("[HOP] Current server added to just-left list (5 min exclusion)")
+
     -- ── Step 1: ONE API call to find a populated server ──────────────────────
     -- Excludes: current server, recently visited, servers with our bots already.
     local occupied = fetchOccupiedServers()
@@ -1667,6 +1714,7 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
                 if type(s) == "table" and s.id
                    and s.id ~= tostring(game.JobId)                        -- not current
                    and not wasVisited(visited, s.id, SERVER_COOLDOWN_MINS)  -- not recently visited
+                   and not wasJustLeft(justLeft, s.id)                     -- not server we just left
                    and not occupied[tostring(s.id)]                         -- no other bot there
                    and tonumber(s.playing) and tonumber(s.playing) >= MIN_PLAYERS
                    and tonumber(s.playing) <= MAX_PLAYERS_ALLOWED then

@@ -1011,6 +1011,13 @@ local function claimBooth(retryCount)
     
     -- Try each booth one by one
     for i, booth in ipairs(unclaimed) do
+        -- Before trying another booth: if we already own one, stop and use it (don't claim a second)
+        local alreadyOwn = findOwnedBooth(boothLocation)
+        if alreadyOwn then
+            log("[BOOTH] Already own a booth — stopping, not claiming another")
+            return alreadyOwn
+        end
+        
         -- Check deadline on every booth attempt
         if BOOTH_CLAIM_DEADLINE and tick() > BOOTH_CLAIM_DEADLINE then
             log("[BOOTH] ⏰ Deadline hit mid-loop — aborting, will hop")
@@ -1049,6 +1056,7 @@ local function claimBooth(retryCount)
         
         -- Try claiming this booth: 3 methods per attempt (instant prompt, remote, then multi-fire prompt)
         local claimed = false
+        local returnPos = nil  -- when we get booth via findOwnedBooth we return this
         for attempt = 1, 4 do
             -- Teleport closer to the ProximityPrompt's parent
             local targetCFrame = myBoothInteraction.CFrame * CFrame.new(0, 0, 2)
@@ -1059,12 +1067,28 @@ local function claimBooth(retryCount)
             tryClaimViaPromptInstant(claimPrompt)
             task.wait(2)
             claimed = verifyClaim(boothLocation, booth.number)
+            if not claimed then
+                task.wait(1)
+                claimed = verifyClaim(boothLocation, booth.number)
+            end
+            if not claimed then
+                local existing = findOwnedBooth(boothLocation)
+                if existing then claimed = true; returnPos = existing end
+            end
             if claimed then break end
             
             -- Method B: try RemoteEvent(s) if game uses them for claim
             tryClaimViaRemote(booth.number)
             task.wait(2)
             claimed = verifyClaim(boothLocation, booth.number)
+            if not claimed then
+                task.wait(1)
+                claimed = verifyClaim(boothLocation, booth.number)
+            end
+            if not claimed then
+                local existing = findOwnedBooth(boothLocation)
+                if existing then claimed = true; returnPos = existing end
+            end
             if claimed then break end
             
             -- Method C: standard multi-fire ProximityPrompt (server can miss single fire)
@@ -1078,6 +1102,10 @@ local function claimBooth(retryCount)
                 if claimed then break end
                 if v < 5 then task.wait(1.2) end
             end
+            if not claimed then
+                local existing = findOwnedBooth(boothLocation)
+                if existing then claimed = true; returnPos = existing end
+            end
             if claimed then
                 claimedBoothNum = booth.number  -- remember: don't claim again this session
                 log("╔═══════════════════════════════════════")
@@ -1085,7 +1113,7 @@ local function claimBooth(retryCount)
                 log("║ Position: " .. tostring(booth.position))
                 log("╚═══════════════════════════════════════")
                 saveLog()
-                return booth.position
+                return (returnPos or booth.position)
             else
                 if attempt < 4 then
                     log("[BOOTH] Claim didn't register, retrying...")
@@ -1095,13 +1123,13 @@ local function claimBooth(retryCount)
         
         -- If we broke from attempt loop because Method A or B succeeded, we have claimed but didn't return yet
         if claimed then
-            claimedBoothNum = booth.number
+            if not claimedBoothNum then claimedBoothNum = booth.number end
             log("╔═══════════════════════════════════════")
             log("║ [SUCCESS] CLAIMED BOOTH #" .. booth.number .. "!")
-            log("║ Position: " .. tostring(booth.position))
+            log("║ Position: " .. tostring(returnPos or booth.position))
             log("╚═══════════════════════════════════════")
             saveLog()
-            return booth.position
+            return (returnPos or booth.position)
         end
         
         log("[BOOTH] Failed after 4 attempts, moving away from booth...")

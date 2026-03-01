@@ -1054,16 +1054,15 @@ local function claimBooth(retryCount)
             continue
         end
         
-        -- Try claiming this booth: 3 methods per attempt (instant prompt, remote, then multi-fire prompt)
         local claimed = false
-        local returnPos = nil  -- when we get booth via findOwnedBooth we return this
+        local returnPos = nil
+        
+        -- Phase 1: ALWAYS try the fast method first (HoldDuration=0, ~1 sec claim) — several times before fallbacks
+        log("[BOOTH] Phase 1: fast method (instant trigger) — up to 4 attempts")
         for attempt = 1, 4 do
-            -- Teleport closer to the ProximityPrompt's parent
             local targetCFrame = myBoothInteraction.CFrame * CFrame.new(0, 0, 2)
             teleportTo(targetCFrame)
             task.wait(0.8)
-            
-            -- Method A: instant trigger (HoldDuration=0) — used by many other PD scripts
             tryClaimViaPromptInstant(claimPrompt)
             task.wait(2)
             claimed = verifyClaim(boothLocation, booth.number)
@@ -1075,23 +1074,44 @@ local function claimBooth(retryCount)
                 local existing = findOwnedBooth(boothLocation)
                 if existing then claimed = true; returnPos = existing end
             end
-            if claimed then break end
-            
-            -- Method B: try RemoteEvent(s) if game uses them for claim
+            if claimed then
+                claimedBoothNum = booth.number
+                log("╔═══════════════════════════════════════")
+                log("║ [SUCCESS] CLAIMED BOOTH #" .. booth.number .. " (fast method)!")
+                log("╚═══════════════════════════════════════")
+                saveLog()
+                return (returnPos or booth.position)
+            end
+            if attempt < 4 then log("[BOOTH] Fast method attempt " .. attempt .. " — retrying...") end
+        end
+        
+        -- Phase 2: Fallback — RemoteEvent(s)
+        log("[BOOTH] Phase 2: fallback remote(s)")
+        for attempt = 1, 2 do
+            teleportTo(myBoothInteraction.CFrame * CFrame.new(0, 0, 2))
+            task.wait(0.5)
             tryClaimViaRemote(booth.number)
             task.wait(2)
             claimed = verifyClaim(boothLocation, booth.number)
             if not claimed then
-                task.wait(1)
-                claimed = verifyClaim(boothLocation, booth.number)
-            end
-            if not claimed then
                 local existing = findOwnedBooth(boothLocation)
                 if existing then claimed = true; returnPos = existing end
             end
-            if claimed then break end
-            
-            -- Method C: standard multi-fire ProximityPrompt (server can miss single fire)
+            if claimed then
+                if not claimedBoothNum then claimedBoothNum = booth.number end
+                log("╔═══════════════════════════════════════")
+                log("║ [SUCCESS] CLAIMED BOOTH #" .. booth.number .. " (remote)!")
+                log("╚═══════════════════════════════════════")
+                saveLog()
+                return (returnPos or booth.position)
+            end
+        end
+        
+        -- Phase 3: Fallback — multi-fire ProximityPrompt (hold E style, slower)
+        log("[BOOTH] Phase 3: fallback multi-fire prompt")
+        for attempt = 1, 4 do
+            teleportTo(myBoothInteraction.CFrame * CFrame.new(0, 0, 2))
+            task.wait(0.8)
             for _ = 1, 5 do
                 pcall(function() fireproximityprompt(claimPrompt) end)
                 task.wait(0.35)
@@ -1107,32 +1127,17 @@ local function claimBooth(retryCount)
                 if existing then claimed = true; returnPos = existing end
             end
             if claimed then
-                claimedBoothNum = booth.number  -- remember: don't claim again this session
+                claimedBoothNum = booth.number
                 log("╔═══════════════════════════════════════")
-                log("║ [SUCCESS] CLAIMED BOOTH #" .. booth.number .. "!")
-                log("║ Position: " .. tostring(booth.position))
+                log("║ [SUCCESS] CLAIMED BOOTH #" .. booth.number .. " (multi-fire)!")
                 log("╚═══════════════════════════════════════")
                 saveLog()
                 return (returnPos or booth.position)
-            else
-                if attempt < 4 then
-                    log("[BOOTH] Claim didn't register, retrying...")
-                end
             end
+            if attempt < 4 then log("[BOOTH] Multi-fire attempt " .. attempt .. " — retrying...") end
         end
         
-        -- If we broke from attempt loop because Method A or B succeeded, we have claimed but didn't return yet
-        if claimed then
-            if not claimedBoothNum then claimedBoothNum = booth.number end
-            log("╔═══════════════════════════════════════")
-            log("║ [SUCCESS] CLAIMED BOOTH #" .. booth.number .. "!")
-            log("║ Position: " .. tostring(returnPos or booth.position))
-            log("╚═══════════════════════════════════════")
-            saveLog()
-            return (returnPos or booth.position)
-        end
-        
-        log("[BOOTH] Failed after 4 attempts, moving away from booth...")
+        log("[BOOTH] All methods failed for this booth, moving to next...")
         walkRandomDirection(20, 2)
         log("[BOOTH] Moving to next booth...")
     end

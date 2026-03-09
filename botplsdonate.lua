@@ -759,6 +759,142 @@ end
 startKickRecovery()
 log("[267] Kick recovery monitor started (Error 267 auto-teleport)")
 
+-- ==================== AUTO-RECONNECT: Error 279 (Connection Failed) recovery ====================
+-- Error 279 = "Failed to connect to the experience. No response from server."
+-- Appears when TeleportToPlaceInstance picks a server that is full/crashed/not responding.
+-- Strategy:
+--   Attempt 1   → click "Retry" once (handles rare transient lag, ~1s blip)
+--   15s timeout → if 279 still visible after 15s from first detect, skip Retry entirely
+--   Attempt 2+  → click "Cancel" then fall back to Roblox matchmaking teleport
+--               (matchmaking never 279s because Roblox picks the server itself)
+-- Button clicking uses multiple methods for exploit-engine compatibility:
+--   MouseButton1Click:Fire(), :Activate(), firebutton() (exploit API if available)
+local function startError279Recovery()
+    task.spawn(function()
+        local retryCount   = 0
+        local lastActTime  = 0
+        local firstDetect  = 0          -- tick() when this 279 episode was first seen
+        local DEBOUNCE     = 10         -- minimum seconds between actions (was 25)
+        local SKIP_RETRY_AFTER = 15     -- if 279 still shows after 15s, skip Retry → go straight to Cancel
+
+        -- Helper: click a button reliably across different exploit engines
+        local function clickBtn(btn)
+            pcall(function() btn.MouseButton1Click:Fire() end)
+            pcall(function() btn:Activate() end)
+            if firebutton then pcall(function() firebutton(btn) end) end
+        end
+
+        while true do
+            task.wait(1.5)  -- poll every 1.5s (was 2s)
+            pcall(function()
+                local cg = game:GetService("CoreGui")
+
+                -- Scan all text for Error 279 indicators
+                local found279 = false
+                for _, elem in pairs(cg:GetDescendants()) do
+                    if elem:IsA("TextLabel") or elem:IsA("TextBox") then
+                        local t = string.lower(tostring(elem.Text or ""))
+                        if string.find(t, "279")
+                        or string.find(t, "failed to connect to the experience")
+                        or string.find(t, "no response from server") then
+                            found279 = true
+                            break
+                        end
+                    end
+                end
+
+                if not found279 then
+                    -- Dialog gone — reset episode tracking
+                    if firstDetect ~= 0 then
+                        firstDetect = 0
+                        retryCount  = 0
+                    end
+                    return
+                end
+
+                local now = tick()
+
+                -- Track when this 279 episode started
+                if firstDetect == 0 then
+                    firstDetect = now
+                    log("[279] Connection Failed — episode started")
+                end
+
+                if now - lastActTime < DEBOUNCE then return end
+                lastActTime = now
+                retryCount  = retryCount + 1
+
+                -- Increment global 279 fail counter so serverHop can skip TeleportToPlaceInstance
+                if getgenv then
+                    getgenv().PD_279_RECENT = (getgenv().PD_279_RECENT or 0) + 1
+                    getgenv().PD_279_LAST_T = now
+                end
+
+                log("[279] Connection Failed — action #" .. retryCount
+                    .. " (episode age=" .. string.format("%.0f", now - firstDetect) .. "s)")
+
+                local episodeAge = now - firstDetect
+                local doRetry    = (retryCount == 1) and (episodeAge < SKIP_RETRY_AFTER)
+
+                if doRetry then
+                    -- First action and dialog appeared recently: try Retry once
+                    local clicked = false
+                    for _, btn in pairs(cg:GetDescendants()) do
+                        if btn:IsA("TextButton") then
+                            local bt = string.lower(tostring(btn.Text or ""))
+                            if string.find(bt, "retry") then
+                                clickBtn(btn)
+                                clicked = true
+                                log("[279] Clicked Retry — checking again in " .. DEBOUNCE .. "s...")
+                                break
+                            end
+                        end
+                    end
+                    if not clicked then
+                        log("[279] No Retry button found — escalating immediately to Cancel+matchmaking")
+                        retryCount = 99  -- skip straight to escalation next iteration
+                    end
+                else
+                    -- Retry already failed, or 279 has been showing for too long → Cancel + matchmaking
+                    log("[279] Escalating: Cancel + matchmaking teleport (retry=" .. retryCount
+                        .. ", episodeAge=" .. string.format("%.0f", episodeAge) .. "s)")
+                    retryCount  = 0
+                    firstDetect = 0
+
+                    -- Click Cancel to dismiss the dialog
+                    for _, btn in pairs(cg:GetDescendants()) do
+                        if btn:IsA("TextButton") then
+                            local bt = string.lower(tostring(btn.Text or ""))
+                            if string.find(bt, "cancel") then
+                                clickBtn(btn)
+                                log("[279] Clicked Cancel")
+                                break
+                            end
+                        end
+                    end
+
+                    task.wait(1.5)
+
+                    -- Re-queue auto-restart script, then matchmaking teleport (never 279s)
+                    if getgenv then getgenv().PD_HAS_QUEUED = false end
+                    pcall(function() queueFunc(_reconnectScript) end)
+                    log("[279] Teleporting via matchmaking (bypassing specific server)...")
+                    pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+                    task.wait(5)
+
+                    -- Final fallback: kick self (queueFunc restarts script on next join)
+                    log("[279] Matchmaking didn't fire — kicking self to force rejoin...")
+                    pcall(function() player:Kick("Rejoining after 279...") end)
+                    task.wait(60)
+                end
+            end)
+        end
+    end)
+end
+
+startError279Recovery()
+log("[279] Error 279 recovery monitor started (Connection Failed auto-retry)")
+
 -- ==================== BOOTH CLAIMER ====================
 -- Wait longer for UI to load after join (game can be slow)
 local BOOTH_UI_WAIT = 12
@@ -2049,15 +2185,30 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
     -- ── Step 2: Teleport ─────────────────────────────────────────────────────
     local teleported = false
 
-    if foundServer then
+    -- Check if TeleportToPlaceInstance has been causing repeated 279s recently.
+    -- If 2+ failures in the last 5 minutes, skip specific-server teleport entirely
+    -- and fall straight through to matchmaking (which never 279s).
+    local recentFails = 0
+    if getgenv then
+        local f = getgenv().PD_279_RECENT or 0
+        local t = getgenv().PD_279_LAST_T or 0
+        if tick() - t < 300 then recentFails = f end  -- only count failures in last 5 min
+    end
+    local skip279Server = (recentFails >= 2)
+    if skip279Server then
+        log(string.format("[HOP] %d recent 279 failures — skipping TeleportToPlaceInstance, using matchmaking directly", recentFails))
+    end
+
+    if foundServer and not skip279Server then
         -- Try TeleportToPlaceInstance (specific populated server)
         local tpOk = pcall(function()
             TeleportService:TeleportToPlaceInstance(PLACE_ID, foundServer.id, player)
         end)
         if tpOk then
-            log("[HOP] TeleportToPlaceInstance initiated — waiting 45s...")
-            waitWithMovement(45)
-            -- If still here, teleport didn't fire — fall through to direct
+            -- Wait 20s (was 45s) — if 279 occurs the recovery monitor handles it within ~12s
+            log("[HOP] TeleportToPlaceInstance initiated — waiting 20s...")
+            waitWithMovement(20)
+            -- If still here after 20s, teleport didn't fire — fall through to direct
             log("[HOP] TeleportToPlaceInstance didn't fire, using direct teleport")
         else
             log("[HOP] TeleportToPlaceInstance failed, using direct teleport")

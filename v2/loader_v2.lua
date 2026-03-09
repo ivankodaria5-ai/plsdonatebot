@@ -253,8 +253,10 @@ btn.MouseButton1Click:Connect(function()
     local fn, compileErr = loadstring(resp.Body)
     if not fn then
         setBusy(false)
-        setStatus("Ошибка загрузки скрипта", Color3.fromRGB(210, 80, 80))
-        warn("[PD Bot] " .. tostring(compileErr))
+        local errShort = tostring(compileErr):match(":(.+)$") or tostring(compileErr)
+        errShort = errShort:sub(1, 72)
+        setStatus("Ошибка скрипта: " .. errShort, Color3.fromRGB(210, 80, 80))
+        warn("[PD Bot] compile error: " .. tostring(compileErr))
         return
     end
 

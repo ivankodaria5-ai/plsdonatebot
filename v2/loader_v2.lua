@@ -1,4 +1,4 @@
-local API = "https://antibody-camcorder-activities-text.trycloudflare.com"
+local API = "https://vital-everything-maple-always.trycloudflare.com"
 
 -- services
 local Players         = game:GetService("Players")

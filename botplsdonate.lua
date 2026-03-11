@@ -664,17 +664,21 @@ player.Idled:Connect(function()
     log("[AFK] Anti-AFK fired — idle kick prevented (Error 278)")
 end)
 
--- Backup: click every 10 minutes regardless (belt + suspenders)
+-- Backup: simulate input every 3 minutes (much more aggressive than old 10-min interval)
+-- Uses the full Button2Down→Button2Up cycle which is more reliable than ClickButton2 alone
 task.spawn(function()
     while true do
-        task.wait(600)
+        task.wait(180)
         pcall(function()
             VirtualUser:CaptureController()
+            VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
+            task.wait(0.1)
+            VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
             VirtualUser:ClickButton2(Vector2.new())
         end)
     end
 end)
-log("[AFK] Anti-AFK running (VirtualUser)")
+log("[AFK] Anti-AFK running (VirtualUser, 3-min interval)")
 
 -- ==================== AUTO-RECONNECT QUEUE: Error 277 recovery ====================
 -- Error 277 = lost connection / network drop.
@@ -771,11 +775,9 @@ log("[267] Kick recovery monitor started (Error 267 auto-teleport)")
 --   MouseButton1Click:Fire(), :Activate(), firebutton() (exploit API if available)
 local function startError279Recovery()
     task.spawn(function()
-        local retryCount   = 0
-        local lastActTime  = 0
-        local firstDetect  = 0          -- tick() when this 279 episode was first seen
-        local DEBOUNCE     = 10         -- minimum seconds between actions (was 25)
-        local SKIP_RETRY_AFTER = 15     -- if 279 still shows after 15s, skip Retry → go straight to Cancel
+        local acting      = false       -- single-flight guard: only one recovery at a time
+        local firstDetect = 0
+        local DEBOUNCE    = 4           -- seconds before acting after first detect (was 10)
 
         -- Helper: click a button reliably across different exploit engines
         local function clickBtn(btn)
@@ -785,7 +787,8 @@ local function startError279Recovery()
         end
 
         while true do
-            task.wait(1.5)  -- poll every 1.5s (was 2s)
+            task.wait(1.5)
+            if acting then continue end
             pcall(function()
                 local cg = game:GetService("CoreGui")
 
@@ -804,89 +807,60 @@ local function startError279Recovery()
                 end
 
                 if not found279 then
-                    -- Dialog gone — reset episode tracking
-                    if firstDetect ~= 0 then
-                        firstDetect = 0
-                        retryCount  = 0
-                    end
+                    firstDetect = 0
                     return
                 end
 
                 local now = tick()
-
-                -- Track when this 279 episode started
                 if firstDetect == 0 then
                     firstDetect = now
-                    log("[279] Connection Failed — episode started")
+                    log("[279] Connection Failed dialog detected — acting in " .. DEBOUNCE .. "s if still showing...")
+                    return
                 end
 
-                if now - lastActTime < DEBOUNCE then return end
-                lastActTime = now
-                retryCount  = retryCount + 1
+                if now - firstDetect < DEBOUNCE then return end
 
-                -- Increment global 279 fail counter so serverHop can skip TeleportToPlaceInstance
+                -- Dialog has been visible long enough — act NOW
+                -- Strategy: skip Retry entirely (it would just retry the same unresponsive
+                -- server and always fail again).  Click Cancel immediately, then use
+                -- matchmaking teleport (TeleportService:Teleport without a specific JobId)
+                -- which Roblox always routes to a live server.
+                acting      = true
+                firstDetect = 0
+
                 if getgenv then
                     getgenv().PD_279_RECENT = (getgenv().PD_279_RECENT or 0) + 1
                     getgenv().PD_279_LAST_T = now
                 end
 
-                log("[279] Connection Failed — action #" .. retryCount
-                    .. " (episode age=" .. string.format("%.0f", now - firstDetect) .. "s)")
+                log("[279] Acting: clicking Cancel then matchmaking teleport...")
 
-                local episodeAge = now - firstDetect
-                local doRetry    = (retryCount == 1) and (episodeAge < SKIP_RETRY_AFTER)
-
-                if doRetry then
-                    -- First action and dialog appeared recently: try Retry once
-                    local clicked = false
-                    for _, btn in pairs(cg:GetDescendants()) do
-                        if btn:IsA("TextButton") then
-                            local bt = string.lower(tostring(btn.Text or ""))
-                            if string.find(bt, "retry") then
-                                clickBtn(btn)
-                                clicked = true
-                                log("[279] Clicked Retry — checking again in " .. DEBOUNCE .. "s...")
-                                break
-                            end
+                -- Click Cancel / Leave button to dismiss the dialog
+                for _, btn in pairs(cg:GetDescendants()) do
+                    if btn:IsA("TextButton") then
+                        local bt = string.lower(tostring(btn.Text or ""))
+                        if string.find(bt, "cancel") or string.find(bt, "leave") then
+                            clickBtn(btn)
+                            log("[279] Clicked: " .. tostring(btn.Text))
+                            break
                         end
                     end
-                    if not clicked then
-                        log("[279] No Retry button found — escalating immediately to Cancel+matchmaking")
-                        retryCount = 99  -- skip straight to escalation next iteration
-                    end
-                else
-                    -- Retry already failed, or 279 has been showing for too long → Cancel + matchmaking
-                    log("[279] Escalating: Cancel + matchmaking teleport (retry=" .. retryCount
-                        .. ", episodeAge=" .. string.format("%.0f", episodeAge) .. "s)")
-                    retryCount  = 0
-                    firstDetect = 0
-
-                    -- Click Cancel to dismiss the dialog
-                    for _, btn in pairs(cg:GetDescendants()) do
-                        if btn:IsA("TextButton") then
-                            local bt = string.lower(tostring(btn.Text or ""))
-                            if string.find(bt, "cancel") then
-                                clickBtn(btn)
-                                log("[279] Clicked Cancel")
-                                break
-                            end
-                        end
-                    end
-
-                    task.wait(1.5)
-
-                    -- Re-queue auto-restart script, then matchmaking teleport (never 279s)
-                    if getgenv then getgenv().PD_HAS_QUEUED = false end
-                    pcall(function() queueFunc(_reconnectScript) end)
-                    log("[279] Teleporting via matchmaking (bypassing specific server)...")
-                    pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
-                    task.wait(5)
-
-                    -- Final fallback: kick self (queueFunc restarts script on next join)
-                    log("[279] Matchmaking didn't fire — kicking self to force rejoin...")
-                    pcall(function() player:Kick("Rejoining after 279...") end)
-                    task.wait(60)
                 end
+
+                task.wait(1)
+
+                -- Re-queue restart script, then matchmaking teleport
+                if getgenv then getgenv().PD_HAS_QUEUED = false end
+                pcall(function() queueFunc(_reconnectScript) end)
+                log("[279] Teleporting via matchmaking (bypassing dead server)...")
+                pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+                task.wait(8)
+
+                -- Fallback: kick self so queueFunc fires on next join
+                log("[279] Matchmaking didn't fire — kicking self...")
+                pcall(function() player:Kick("Rejoining after 279...") end)
+                task.wait(30)
+                acting = false  -- reset so scanner can act again if still stuck
             end)
         end
     end)
@@ -894,6 +868,31 @@ end
 
 startError279Recovery()
 log("[279] Error 279 recovery monitor started (Connection Failed auto-retry)")
+
+-- ==================== TELEPORT INIT FAILED: early 279 intercept ====================
+-- TeleportInitFailed fires on the CLIENT when a teleport attempt fails — this is
+-- BEFORE the 279 dialog even appears.  Catching it here means the bot recovers
+-- instantly instead of waiting for the CoreGui scanner to notice the dialog.
+-- Fallback to matchmaking (TeleportService:Teleport) which never 279s.
+TeleportService.TeleportInitFailed:Connect(function(plr, result, errMsg)
+    log(string.format("[TPFail] TeleportInitFailed: %s / %s", tostring(result), tostring(errMsg or "")))
+    -- Increment global 279 counter so serverHop skips TeleportToPlaceInstance next hop
+    if getgenv then
+        getgenv().PD_279_RECENT = (getgenv().PD_279_RECENT or 0) + 1
+        getgenv().PD_279_LAST_T = tick()
+    end
+    -- Re-queue restart script (in case prior queue was consumed)
+    if getgenv then getgenv().PD_HAS_QUEUED = false end
+    pcall(function() queueFunc(_reconnectScript) end)
+    task.wait(1.5)
+    log("[TPFail] Retrying via matchmaking (bypasses specific-server 279)...")
+    pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+    task.wait(6)
+    -- If matchmaking teleport didn't fire, kick self — queueFunc restarts on rejoin
+    log("[TPFail] Matchmaking didn't fire — kicking self to force rejoin...")
+    pcall(function() player:Kick("Rejoining after TeleportInitFailed...") end)
+end)
+log("[TPFail] TeleportInitFailed early-intercept connected")
 
 -- ==================== BOOTH CLAIMER ====================
 -- Wait longer for UI to load after join (game can be slow)
@@ -2205,10 +2204,12 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
             TeleportService:TeleportToPlaceInstance(PLACE_ID, foundServer.id, player)
         end)
         if tpOk then
-            -- Wait 20s (was 45s) — if 279 occurs the recovery monitor handles it within ~12s
-            log("[HOP] TeleportToPlaceInstance initiated — waiting 20s...")
-            waitWithMovement(20)
-            -- If still here after 20s, teleport didn't fire — fall through to direct
+            -- Wait 12s — TeleportInitFailed fires within a few seconds on failure,
+            -- so we don't need to sit as long as before.  279 CoreGui scanner also
+            -- acts within 4s of the dialog appearing.
+            log("[HOP] TeleportToPlaceInstance initiated — waiting 12s...")
+            waitWithMovement(12)
+            -- If still here after 12s, teleport didn't fire — fall through to direct
             log("[HOP] TeleportToPlaceInstance didn't fire, using direct teleport")
         else
             log("[HOP] TeleportToPlaceInstance failed, using direct teleport")

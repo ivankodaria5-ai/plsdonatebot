@@ -765,25 +765,60 @@ log("[267] Kick recovery monitor started (Error 267 auto-teleport)")
 
 -- ==================== AUTO-RECONNECT: Error 279 (Connection Failed) recovery ====================
 -- Error 279 = "Failed to connect to the experience. No response from server."
--- Appears when TeleportToPlaceInstance picks a server that is full/crashed/not responding.
--- Strategy:
---   Attempt 1   → click "Retry" once (handles rare transient lag, ~1s blip)
---   15s timeout → if 279 still visible after 15s from first detect, skip Retry entirely
---   Attempt 2+  → click "Cancel" then fall back to Roblox matchmaking teleport
---               (matchmaking never 279s because Roblox picks the server itself)
--- Button clicking uses multiple methods for exploit-engine compatibility:
---   MouseButton1Click:Fire(), :Activate(), firebutton() (exploit API if available)
+-- Root causes: target server OOM/crashed, Roblox rate-limiting teleports after long sessions.
+--
+-- Strategy (learned from DevForum + long-session behavior):
+--   Attempts 0-1 → click RETRY (fires TeleportInitFailed reliably → matchmaking path)
+--   Attempts 2-3 → click Cancel + matchmaking with short wait
+--   Attempts 4+  → click Cancel + exponential backoff (up to 5 min) before retrying
+--   After 6+ consecutive failures → 6-minute cooldown (Roblox rate-limit reset)
+--
+-- NOTE: player:Kick() is a server-side function and DOES NOT WORK from LocalScript/executor.
+-- The only real client-side escapes are TeleportService:Teleport and clicking dialog buttons.
 local function startError279Recovery()
     task.spawn(function()
-        local acting      = false       -- single-flight guard: only one recovery at a time
-        local firstDetect = 0
-        local DEBOUNCE    = 4           -- seconds before acting after first detect (was 10)
+        local acting       = false
+        local firstDetect  = 0
+        local DEBOUNCE     = 3
+        -- Per-stuck-episode retry tracking (resets once dialog goes away)
+        local episodeRetry = 0
+        -- Global consecutive failure counter (never resets until success)
+        if getgenv and not getgenv().PD_279_CONSEC then
+            getgenv().PD_279_CONSEC = 0
+        end
+        -- Backoff table (seconds to wait before attempting matchmaking each time)
+        local BACKOFF = {2, 5, 15, 45, 120, 300}
+        local COOLDOWN_AFTER = 6       -- enter cooldown after this many consec failures
+        local COOLDOWN_DUR   = 360     -- 6 minutes (clears Roblox rate limits)
 
-        -- Helper: click a button reliably across different exploit engines
         local function clickBtn(btn)
             pcall(function() btn.MouseButton1Click:Fire() end)
             pcall(function() btn:Activate() end)
             if firebutton then pcall(function() firebutton(btn) end) end
+        end
+
+        local function findBtn(cg, ...)
+            local targets = {...}
+            for _, btn in pairs(cg:GetDescendants()) do
+                if btn:IsA("TextButton") then
+                    local bt = string.lower(tostring(btn.Text or ""))
+                    for _, t in ipairs(targets) do
+                        if string.find(bt, t, 1, true) then return btn, bt end
+                    end
+                end
+            end
+            return nil
+        end
+
+        local function tryMatchmaking(waitSecs)
+            if getgenv then getgenv().PD_HAS_QUEUED = false end
+            pcall(function() queueFunc(_reconnectScript) end)
+            log("[279] Matchmaking teleport (wait=" .. waitSecs .. "s)...")
+            pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+            task.wait(waitSecs)
+            -- Second attempt if still here
+            pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+            task.wait(math.max(waitSecs, 10))
         end
 
         while true do
@@ -792,7 +827,6 @@ local function startError279Recovery()
             pcall(function()
                 local cg = game:GetService("CoreGui")
 
-                -- Scan all text for Error 279 indicators
                 local found279 = false
                 for _, elem in pairs(cg:GetDescendants()) do
                     if elem:IsA("TextLabel") or elem:IsA("TextBox") then
@@ -807,92 +841,131 @@ local function startError279Recovery()
                 end
 
                 if not found279 then
-                    firstDetect = 0
+                    if firstDetect ~= 0 then
+                        -- Dialog disappeared on its own — success, reset episode
+                        firstDetect  = 0
+                        episodeRetry = 0
+                        if getgenv then getgenv().PD_279_CONSEC = 0 end
+                    end
                     return
                 end
 
                 local now = tick()
                 if firstDetect == 0 then
                     firstDetect = now
-                    log("[279] Connection Failed dialog detected — acting in " .. DEBOUNCE .. "s if still showing...")
+                    log("[279] Dialog detected — acting in " .. DEBOUNCE .. "s...")
                     return
                 end
-
                 if now - firstDetect < DEBOUNCE then return end
 
-                -- Dialog has been visible long enough — act NOW
-                -- Strategy: skip Retry entirely (it would just retry the same unresponsive
-                -- server and always fail again).  Click Cancel immediately, then use
-                -- matchmaking teleport (TeleportService:Teleport without a specific JobId)
-                -- which Roblox always routes to a live server.
-                acting      = true
+                acting = true
                 firstDetect = 0
 
                 if getgenv then
                     getgenv().PD_279_RECENT = (getgenv().PD_279_RECENT or 0) + 1
                     getgenv().PD_279_LAST_T = now
+                    getgenv().PD_279_CONSEC = (getgenv().PD_279_CONSEC or 0) + 1
+                end
+                local consec = getgenv and getgenv().PD_279_CONSEC or episodeRetry + 1
+                log(string.format("[279] Attempt #%d (consec=%d)", episodeRetry + 1, consec))
+
+                -- Cooldown mode: too many consecutive failures = likely Roblox rate-limit
+                if consec >= COOLDOWN_AFTER then
+                    log(string.format("[279] %d consec failures — entering %ds cooldown (rate-limit reset)...", consec, COOLDOWN_DUR))
+                    -- Click Cancel to dismiss dialog so we're not fully frozen
+                    local cancelBtn = findBtn(cg, "cancel", "leave", "ok")
+                    if cancelBtn then clickBtn(cancelBtn) end
+                    task.wait(COOLDOWN_DUR)
+                    if getgenv then getgenv().PD_279_CONSEC = 0 end
+                    episodeRetry = 0
+                    acting = false
+                    return
                 end
 
-                log("[279] Acting: clicking Cancel then matchmaking teleport...")
-
-                -- Click Cancel / Leave button to dismiss the dialog
-                for _, btn in pairs(cg:GetDescendants()) do
-                    if btn:IsA("TextButton") then
-                        local bt = string.lower(tostring(btn.Text or ""))
-                        if string.find(bt, "cancel") or string.find(bt, "leave") then
-                            clickBtn(btn)
-                            log("[279] Clicked: " .. tostring(btn.Text))
-                            break
-                        end
+                -- Attempts 0-1: click RETRY (fires TeleportInitFailed → its handler does matchmaking)
+                -- TeleportInitFailed is more reliable than calling TeleportService:Teleport directly
+                -- from an uncertain client state.
+                if episodeRetry < 2 then
+                    local retryBtn = findBtn(cg, "retry")
+                    if retryBtn then
+                        log("[279] Clicking Retry (fires TeleportInitFailed → matchmaking)...")
+                        clickBtn(retryBtn)
+                        episodeRetry = episodeRetry + 1
+                        -- TeleportInitFailed handler will run; give it time
+                        task.wait(20)
+                        acting = false
+                        return
                     end
                 end
 
-                task.wait(1)
+                -- Attempts 2+: Cancel + direct matchmaking with backoff
+                local cancelBtn = findBtn(cg, "cancel", "leave")
+                if cancelBtn then
+                    clickBtn(cancelBtn)
+                    log("[279] Clicked Cancel")
+                end
+                task.wait(2)
 
-                -- Re-queue restart script, then matchmaking teleport
-                if getgenv then getgenv().PD_HAS_QUEUED = false end
-                pcall(function() queueFunc(_reconnectScript) end)
-                log("[279] Teleporting via matchmaking (bypassing dead server)...")
-                pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
-                task.wait(8)
+                local backoffIdx = math.min(episodeRetry + 1, #BACKOFF)
+                local waitSecs   = BACKOFF[backoffIdx]
+                log(string.format("[279] Backoff=%ds (attempt %d)...", waitSecs, episodeRetry + 1))
+                task.wait(waitSecs)
 
-                -- Fallback: kick self so queueFunc fires on next join
-                log("[279] Matchmaking didn't fire — kicking self...")
-                pcall(function() player:Kick("Rejoining after 279...") end)
-                task.wait(30)
-                acting = false  -- reset so scanner can act again if still stuck
+                tryMatchmaking(15)
+                episodeRetry = episodeRetry + 1
+                acting = false
             end)
         end
     end)
 end
 
 startError279Recovery()
-log("[279] Error 279 recovery monitor started (Connection Failed auto-retry)")
+log("[279] Error 279 recovery monitor started (Retry-first + exponential backoff)")
 
 -- ==================== TELEPORT INIT FAILED: early 279 intercept ====================
--- TeleportInitFailed fires on the CLIENT when a teleport attempt fails — this is
--- BEFORE the 279 dialog even appears.  Catching it here means the bot recovers
--- instantly instead of waiting for the CoreGui scanner to notice the dialog.
--- Fallback to matchmaking (TeleportService:Teleport) which never 279s.
-TeleportService.TeleportInitFailed:Connect(function(plr, result, errMsg)
-    log(string.format("[TPFail] TeleportInitFailed: %s / %s", tostring(result), tostring(errMsg or "")))
-    -- Increment global 279 counter so serverHop skips TeleportToPlaceInstance next hop
-    if getgenv then
-        getgenv().PD_279_RECENT = (getgenv().PD_279_RECENT or 0) + 1
-        getgenv().PD_279_LAST_T = tick()
-    end
-    -- Re-queue restart script (in case prior queue was consumed)
-    if getgenv then getgenv().PD_HAS_QUEUED = false end
-    pcall(function() queueFunc(_reconnectScript) end)
-    task.wait(1.5)
-    log("[TPFail] Retrying via matchmaking (bypasses specific-server 279)...")
-    pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
-    task.wait(6)
-    -- If matchmaking teleport didn't fire, kick self — queueFunc restarts on rejoin
-    log("[TPFail] Matchmaking didn't fire — kicking self to force rejoin...")
-    pcall(function() player:Kick("Rejoining after TeleportInitFailed...") end)
-end)
-log("[TPFail] TeleportInitFailed early-intercept connected")
+-- TeleportInitFailed fires BEFORE the 279 dialog appears (not always — OOM servers may skip it).
+-- We track consecutive failures and apply backoff to handle Roblox rate-limiting.
+-- NOTE: player:Kick() does NOT work from LocalScript — removed.
+do
+    local _tpfailCount = 0
+    local _tpfailLast  = 0
+    local _TPFAIL_BACKOFF = {3, 8, 20, 60, 180}  -- seconds before matchmaking retry
+
+    TeleportService.TeleportInitFailed:Connect(function(plr, result, errMsg)
+        local now = tick()
+        log(string.format("[TPFail] TeleportInitFailed: %s / %s", tostring(result), tostring(errMsg or "")))
+
+        if getgenv then
+            getgenv().PD_279_RECENT = (getgenv().PD_279_RECENT or 0) + 1
+            getgenv().PD_279_LAST_T = now
+            getgenv().PD_279_CONSEC = (getgenv().PD_279_CONSEC or 0) + 1
+        end
+
+        -- Count consecutive failures (reset if last failure was >10min ago)
+        if now - _tpfailLast > 600 then _tpfailCount = 0 end
+        _tpfailCount = _tpfailCount + 1
+        _tpfailLast  = now
+
+        local backoffIdx = math.min(_tpfailCount, #_TPFAIL_BACKOFF)
+        local waitSecs   = _TPFAIL_BACKOFF[backoffIdx]
+        log(string.format("[TPFail] Failure #%d — waiting %ds before matchmaking...", _tpfailCount, waitSecs))
+
+        if getgenv then getgenv().PD_HAS_QUEUED = false end
+        pcall(function() queueFunc(_reconnectScript) end)
+        task.wait(waitSecs)
+
+        log("[TPFail] Matchmaking teleport...")
+        pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+        task.wait(12)
+        -- Second attempt if still here (teleport can silently fail in rate-limited state)
+        log("[TPFail] Still here — second matchmaking attempt...")
+        pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+        task.wait(20)
+        -- If both failed: 279 dialog scanner will catch the visible dialog and handle it
+        log("[TPFail] Both matchmaking attempts stalled — 279 dialog scanner will take over")
+    end)
+end
+log("[TPFail] TeleportInitFailed early-intercept connected (with backoff)")
 
 -- ==================== BOOTH CLAIMER ====================
 -- Wait longer for UI to load after join (game can be slow)
@@ -2216,15 +2289,23 @@ else loadstring(game:HttpGet("]] .. SCRIPT_URL .. [["))() end
         end
     end
 
-    -- Direct teleport (Roblox matchmaking picks server — always works, no API needed)
+    -- Direct teleport (Roblox matchmaking picks server)
     log("[HOP] ⚡ Direct teleport to random server via matchmaking...")
     pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
-    task.wait(5)
-
-    -- Final fallback: kick self (script restarts via queueFunc on rejoin)
-    log("[HOP] Kicking self to force rejoin...")
-    pcall(function() player:Kick("Rejoining server...") end)
-    task.wait(60)  -- script should be dead by now; this only runs if kick also failed
+    task.wait(8)
+    -- Second attempt if still here (can fail silently when rate-limited)
+    log("[HOP] Still here — second matchmaking attempt...")
+    pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+    task.wait(15)
+    -- Third attempt with longer wait
+    log("[HOP] Still here — third matchmaking attempt (rate-limit backoff)...")
+    task.wait(30)
+    pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+    task.wait(30)
+    -- NOTE: player:Kick() does NOT work from LocalScript/executor — removed.
+    -- If all teleport attempts stalled, 279 dialog scanner will handle the visible dialog.
+    log("[HOP] All teleport attempts stalled — 279 scanner active")
+    task.wait(60)
 end
 
 -- ==================== DONATION MONITOR ====================

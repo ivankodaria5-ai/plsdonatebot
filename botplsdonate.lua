@@ -697,6 +697,96 @@ end
 pcall(function() queueFunc(_reconnectScript) end)
 log("[RECONNECT] Script queued — clicking Reconnect on 277 screen will auto-restart bot")
 
+-- ==================== AUTO-RECONNECT: Error 277 (Lost Connection) active monitor ====================
+-- Error 277 = "Please check your internet connection and try again."
+-- Strategy (based on open-source auto-rejoin patterns):
+--   1. Scan CoreGui every 2s for the 277 disconnect dialog
+--   2. Click "Reconnect" button (queueonteleport fires → script auto-restarts on new server)
+--   3. If Reconnect click doesn't leave game within 8s, fall back to TeleportService:Teleport()
+task.spawn(function()
+    local recovering277 = false
+    local firstSeen277  = 0
+    local DEBOUNCE_277  = 2  -- seconds before acting (avoids flicker false-positives)
+
+    local function clickBtn277(cg, ...)
+        local targets = {...}
+        for _, btn in pairs(cg:GetDescendants()) do
+            if btn:IsA("TextButton") then
+                local bt = string.lower(tostring(btn.Text or ""))
+                for _, t in ipairs(targets) do
+                    if string.find(bt, t, 1, true) then
+                        pcall(function() btn.MouseButton1Click:Fire() end)
+                        pcall(function() btn:Activate() end)
+                        if firebutton then pcall(function() firebutton(btn) end) end
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
+
+    while true do
+        task.wait(2)
+        if recovering277 then continue end
+        pcall(function()
+            local cg = game:GetService("CoreGui")
+            local found277 = false
+            for _, elem in pairs(cg:GetDescendants()) do
+                if elem:IsA("TextLabel") or elem:IsA("TextBox") then
+                    local t = string.lower(tostring(elem.Text or ""))
+                    if string.find(t, "277")
+                    or string.find(t, "check your internet connection") then
+                        found277 = true
+                        break
+                    end
+                end
+            end
+
+            if not found277 then
+                firstSeen277 = 0
+                return
+            end
+
+            local now = tick()
+            if firstSeen277 == 0 then
+                firstSeen277 = now
+                log("[277] Disconnect dialog detected — acting in " .. DEBOUNCE_277 .. "s...")
+                return
+            end
+            if now - firstSeen277 < DEBOUNCE_277 then return end
+
+            recovering277 = true
+            firstSeen277  = 0
+            log("[277] Clicking Reconnect button...")
+
+            -- Re-queue script so it fires on next join (in case prior queue was consumed)
+            if getgenv then getgenv().PD_HAS_QUEUED = false end
+            pcall(function() queueFunc(_reconnectScript) end)
+
+            local clicked = clickBtn277(cg, "reconnect")
+            if clicked then
+                log("[277] Reconnect clicked — waiting 8s for teleport...")
+                task.wait(8)
+                -- If still here (Reconnect click failed silently), force teleport
+                log("[277] Reconnect didn't fire — forcing TeleportService:Teleport...")
+            else
+                log("[277] Reconnect button not found — forcing TeleportService:Teleport...")
+            end
+
+            -- Fallback / direct teleport (same pattern as alyssagithub auto-rejoin)
+            for i = 1, 5 do
+                pcall(function() TeleportService:Teleport(PLACE_ID, player) end)
+                task.wait(3)
+            end
+
+            -- If somehow still here, unlock so monitor can try again
+            recovering277 = false
+        end)
+    end
+end)
+log("[277] Error 277 active recovery monitor started (auto-click Reconnect + teleport fallback)")
+
 -- ==================== AUTO-RECONNECT: Error 267 (Kick) recovery ====================
 -- Error 267 = "You have been kicked by this experience or its moderators"
 -- Unlike Error 277 (has "Reconnect" button), Error 267 only has a "Leave" button.
